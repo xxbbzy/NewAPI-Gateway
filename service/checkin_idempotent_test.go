@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,12 +82,14 @@ func TestRunProviderCheckinTreatsAlreadySignedAsSuccess(t *testing.T) {
 	}
 }
 
-func TestTriggerFullCheckinRunKeepsRealFailureAndCountsAlreadySignedAsSuccess(t *testing.T) {
+func TestTriggerUncheckedCheckinRunSkipsProvidersAlreadyCheckedInToday(t *testing.T) {
 	originDB := model.DB
 	model.DB = prepareServiceCheckinTestDB(t)
 	defer func() { model.DB = originDB }()
 
+	var alreadySignedHits int32
 	alreadySignedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&alreadySignedHits, 1)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"success":false,"message":"今日已签到","data":{"quota_awarded":0}}`))
 	}))
@@ -106,6 +109,7 @@ func TestTriggerFullCheckinRunKeepsRealFailureAndCountsAlreadySignedAsSuccess(t 
 			UserID:         1,
 			Status:         1,
 			CheckinEnabled: true,
+			LastCheckinAt:  time.Now().Unix(),
 		},
 		{
 			Name:           "failed-provider",
@@ -123,13 +127,16 @@ func TestTriggerFullCheckinRunKeepsRealFailureAndCountsAlreadySignedAsSuccess(t 
 		}
 	}
 
-	run, err := TriggerFullCheckinRun("manual")
+	run, err := TriggerUncheckedCheckinRun("manual")
 	if err != nil {
-		t.Fatalf("trigger full checkin run failed: %v", err)
+		t.Fatalf("trigger unchecked checkin run failed: %v", err)
 	}
 
-	if run.SuccessCount != 1 {
-		t.Fatalf("expected success count 1, got %d", run.SuccessCount)
+	if run.TotalCount != 1 {
+		t.Fatalf("expected total count 1 (only unchecked providers), got %d", run.TotalCount)
+	}
+	if run.SuccessCount != 0 {
+		t.Fatalf("expected success count 0, got %d", run.SuccessCount)
 	}
 	if run.FailureCount != 1 {
 		t.Fatalf("expected failure count 1, got %d", run.FailureCount)
@@ -137,33 +144,69 @@ func TestTriggerFullCheckinRunKeepsRealFailureAndCountsAlreadySignedAsSuccess(t 
 	if run.Status != "partial" {
 		t.Fatalf("expected partial run status, got %s", run.Status)
 	}
+	if !strings.Contains(run.Message, "未签到渠道签到完成") {
+		t.Fatalf("expected unchecked-only summary message, got: %s", run.Message)
+	}
+	if atomic.LoadInt32(&alreadySignedHits) != 0 {
+		t.Fatalf("expected already-signed provider to be skipped, got %d upstream calls", alreadySignedHits)
+	}
 
 	items, queryErr := model.GetRecentCheckinRunItems(10)
 	if queryErr != nil {
 		t.Fatalf("query checkin items failed: %v", queryErr)
 	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 checkin items, got %d", len(items))
+	if len(items) != 1 {
+		t.Fatalf("expected 1 checkin item, got %d", len(items))
 	}
 
-	statusByProvider := map[string]string{}
-	messageByProvider := map[string]string{}
-	for _, item := range items {
-		statusByProvider[item.ProviderName] = item.Status
-		messageByProvider[item.ProviderName] = item.Message
+	if items[0].ProviderName != "failed-provider" {
+		t.Fatalf("unexpected provider checked in: %s", items[0].ProviderName)
+	}
+	if items[0].Status != "failed" {
+		t.Fatalf("failed provider should remain failed, got %s", items[0].Status)
+	}
+	if !strings.Contains(items[0].Message, "checkin failed: token invalid") {
+		t.Fatalf("unexpected failure message: %s", items[0].Message)
+	}
+}
+
+func TestTriggerUncheckedCheckinRunReturnsExplicitMessageWhenNoUncheckedProviders(t *testing.T) {
+	originDB := model.DB
+	model.DB = prepareServiceCheckinTestDB(t)
+	defer func() { model.DB = originDB }()
+
+	provider := &model.Provider{
+		Name:           "checked-provider",
+		BaseURL:        "https://example.com",
+		AccessToken:    "token-a",
+		UserID:         1,
+		Status:         1,
+		CheckinEnabled: true,
+		LastCheckinAt:  time.Now().Unix(),
+	}
+	if err := provider.Insert(); err != nil {
+		t.Fatalf("insert provider failed: %v", err)
 	}
 
-	if statusByProvider["already-signed-provider"] != "success" {
-		t.Fatalf("already-signed provider should be success, got %s", statusByProvider["already-signed-provider"])
+	run, err := TriggerUncheckedCheckinRun("manual")
+	if err != nil {
+		t.Fatalf("trigger unchecked checkin run failed: %v", err)
 	}
-	if messageByProvider["already-signed-provider"] != "今日已签到" {
-		t.Fatalf("unexpected already-signed message: %s", messageByProvider["already-signed-provider"])
+	if run.TotalCount != 0 {
+		t.Fatalf("expected total count 0, got %d", run.TotalCount)
+	}
+	if run.SuccessCount != 0 || run.FailureCount != 0 {
+		t.Fatalf("expected success/failure count 0, got success=%d failure=%d", run.SuccessCount, run.FailureCount)
+	}
+	if run.Message != manualUncheckedNoopMessage {
+		t.Fatalf("unexpected noop message: %s", run.Message)
 	}
 
-	if statusByProvider["failed-provider"] != "failed" {
-		t.Fatalf("failed provider should remain failed, got %s", statusByProvider["failed-provider"])
+	items, queryErr := model.GetRecentCheckinRunItems(10)
+	if queryErr != nil {
+		t.Fatalf("query checkin items failed: %v", queryErr)
 	}
-	if !strings.Contains(messageByProvider["failed-provider"], "checkin failed: token invalid") {
-		t.Fatalf("unexpected failure message: %s", messageByProvider["failed-provider"])
+	if len(items) != 0 {
+		t.Fatalf("expected no checkin items for noop run, got %d", len(items))
 	}
 }

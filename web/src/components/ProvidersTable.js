@@ -6,6 +6,7 @@ import {
   Trash2,
   Edit,
   CheckSquare,
+  X,
   Eye,
   Download,
   Upload
@@ -162,56 +163,47 @@ const ProvidersTable = () => {
     }
   };
 
-  const checkinProvider = async (id) => {
-    const res = await API.post(`/api/provider/${id}/checkin`);
-    const { success, message } = res.data;
-    if (success) {
-      showSuccess(message || '签到成功');
-      reloadProviders();
-    } else {
-      showError(message);
-    }
-  };
-
   const runFullCheckin = async () => {
     const res = await API.post('/api/provider/checkin/run');
     const { success, message } = res.data;
     if (success) {
-      showSuccess(message || '已触发全量签到');
+      showSuccess(message || '已触发未签到渠道签到');
       reloadProviders();
     } else {
       showError(message);
     }
   };
 
-  const enableProviderCheckin = async (provider) => {
+  const toggleProviderCheckin = async (provider, nextCheckinEnabled) => {
     const providerId = provider.id;
     const previousCheckinEnabled = !!provider.checkin_enabled;
+    const successMessage = nextCheckinEnabled ? '签到已开启' : '签到已取消';
+    const failureMessage = nextCheckinEnabled ? '开启签到失败' : '取消签到失败';
 
     setProviders((prevProviders) => prevProviders.map((item) => (
-      item.id === providerId ? { ...item, checkin_enabled: true } : item
+      item.id === providerId ? { ...item, checkin_enabled: nextCheckinEnabled } : item
     )));
 
     try {
       const res = await API.put('/api/provider/', {
         id: providerId,
-        checkin_enabled: true,
+        checkin_enabled: nextCheckinEnabled,
       });
       const { success, message } = res.data;
       if (success) {
-        showSuccess(message || '签到已开启');
+        showSuccess(message || successMessage);
         reloadProviders();
         return;
       }
       setProviders((prevProviders) => prevProviders.map((item) => (
         item.id === providerId ? { ...item, checkin_enabled: previousCheckinEnabled } : item
       )));
-      showError(message || '开启签到失败');
+      showError(message || failureMessage);
     } catch (error) {
       setProviders((prevProviders) => prevProviders.map((item) => (
         item.id === providerId ? { ...item, checkin_enabled: previousCheckinEnabled } : item
       )));
-      showError('开启签到失败');
+      showError(failureMessage);
     }
   };
 
@@ -380,7 +372,7 @@ const ProvidersTable = () => {
               刷新概览
             </Button>
             <Button variant="primary" onClick={runFullCheckin} icon={CheckSquare} disabled={checkinOverviewLoading}>
-              立即全量签到
+              签到未签到渠道
             </Button>
           </div>
         </div>
@@ -514,10 +506,10 @@ const ProvidersTable = () => {
                       <Button size="sm" variant="secondary" onClick={() => openEdit(p)} title="编辑" icon={Edit} />
                       <Button size="sm" variant="outline" onClick={() => syncProvider(p.id)} title="同步" icon={RefreshCw} />
                       {!p.checkin_enabled && (
-                        <Button size="sm" variant="ghost" color="blue" onClick={() => enableProviderCheckin(p)} title="一键开启签到" icon={CheckSquare} />
+                        <Button size="sm" variant="ghost" color="blue" onClick={() => toggleProviderCheckin(p, true)} title="一键开启签到" icon={CheckSquare} />
                       )}
                       {p.checkin_enabled && (
-                        <Button size="sm" variant="ghost" color="green" onClick={() => checkinProvider(p.id)} title="签到" icon={CheckSquare} />
+                        <Button size="sm" variant="ghost" color="red" onClick={() => toggleProviderCheckin(p, false)} title="一键取消签到" icon={X} />
                       )}
                       <Button size="sm" variant="danger" onClick={() => deleteProvider(p.id)} title="删除" icon={Trash2} />
                     </div>

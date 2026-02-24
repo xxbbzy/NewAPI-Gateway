@@ -15,6 +15,7 @@ var ErrCheckinRunInProgress = errors.New("checkin run is already in progress")
 
 const upstreamCheckinDisabledKeyword = "签到功能未启用"
 const upstreamCheckinAutoDisableHint = "签到功能上游未启用，已自动关闭签到"
+const manualUncheckedNoopMessage = "签到完成：今日无未签到渠道，无需执行"
 
 type CheckinScheduleConfig struct {
 	Enabled  bool
@@ -131,6 +132,10 @@ func buildCheckinRunMessage(successCount int, failureCount int, uncheckinCount i
 	return fmt.Sprintf("签到完成：成功 %d，失败 %d，未签到 %d", successCount, failureCount, uncheckinCount)
 }
 
+func buildUncheckedCheckinRunMessage(successCount int, failureCount int, uncheckinCount int) string {
+	return fmt.Sprintf("未签到渠道签到完成：成功 %d，失败 %d，未签到 %d", successCount, failureCount, uncheckinCount)
+}
+
 func normalizeCheckinFailureMessage(message string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(message))), "")
 }
@@ -201,25 +206,20 @@ func getUncheckinCount(now time.Time, timezone string) int {
 	return len(providers)
 }
 
-func TriggerFullCheckinRun(triggerType string) (*model.CheckinRun, error) {
-	if !tryAcquireCheckinRun() {
-		return nil, ErrCheckinRunInProgress
-	}
-	defer releaseCheckinRun()
-
-	config := GetCheckinScheduleConfig()
-	startedAt := time.Now()
-	dayStart, dayKey, _ := checkinDayStart(startedAt, config.Timezone)
-
-	providers, err := model.GetCheckinEnabledProviders()
-	if err != nil {
-		return nil, err
-	}
-
+func executeCheckinRun(
+	triggerType string,
+	startedAt time.Time,
+	timezone string,
+	dayStart int64,
+	dayKey string,
+	providers []*model.Provider,
+	emptyMessage string,
+	summaryBuilder func(successCount int, failureCount int, uncheckinCount int) string,
+) (*model.CheckinRun, error) {
 	run := &model.CheckinRun{
 		TriggerType:    triggerType,
 		Status:         "running",
-		Timezone:       config.Timezone,
+		Timezone:       timezone,
 		ScheduledDate:  dayKey,
 		StartedAt:      startedAt.Unix(),
 		TotalCount:     len(providers),
@@ -259,11 +259,49 @@ func TriggerFullCheckinRun(triggerType string) (*model.CheckinRun, error) {
 	if run.FailureCount > 0 {
 		run.Status = "partial"
 	}
-	run.Message = buildCheckinRunMessage(run.SuccessCount, run.FailureCount, run.UncheckinCount)
+	if len(providers) == 0 && strings.TrimSpace(emptyMessage) != "" {
+		run.Message = emptyMessage
+	} else {
+		if summaryBuilder == nil {
+			summaryBuilder = buildCheckinRunMessage
+		}
+		run.Message = summaryBuilder(run.SuccessCount, run.FailureCount, run.UncheckinCount)
+	}
 	if err := run.Update(); err != nil {
 		common.SysLog("update checkin run summary failed: " + err.Error())
 	}
 	return run, nil
+}
+
+func triggerCheckinRun(
+	triggerType string,
+	providerLoader func(dayStart int64) ([]*model.Provider, error),
+	emptyMessage string,
+	summaryBuilder func(successCount int, failureCount int, uncheckinCount int) string,
+) (*model.CheckinRun, error) {
+	if !tryAcquireCheckinRun() {
+		return nil, ErrCheckinRunInProgress
+	}
+	defer releaseCheckinRun()
+
+	config := GetCheckinScheduleConfig()
+	startedAt := time.Now()
+	dayStart, dayKey, _ := checkinDayStart(startedAt, config.Timezone)
+	providers, err := providerLoader(dayStart)
+	if err != nil {
+		return nil, err
+	}
+	return executeCheckinRun(triggerType, startedAt, config.Timezone, dayStart, dayKey, providers, emptyMessage, summaryBuilder)
+}
+
+func TriggerFullCheckinRun(triggerType string) (*model.CheckinRun, error) {
+	return triggerCheckinRun(triggerType, func(_ int64) ([]*model.Provider, error) {
+		return model.GetCheckinEnabledProviders()
+	}, "", nil)
+}
+
+func TriggerUncheckedCheckinRun(triggerType string) (*model.CheckinRun, error) {
+	return triggerCheckinRun(triggerType, model.GetUncheckinProviders, manualUncheckedNoopMessage, buildUncheckedCheckinRunMessage)
 }
 
 func RunScheduledCheckinIfNeeded(now time.Time) {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -15,6 +16,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+var syncProviderAfterTokenCreate = func(provider *model.Provider) {
+	go func() {
+		if err := service.SyncProvider(provider); err != nil {
+			common.SysLog("sync after create token failed: " + err.Error())
+		}
+	}()
+}
 
 func GetProviders(c *gin.Context) {
 	p, _ := strconv.Atoi(c.Query("p"))
@@ -99,7 +108,7 @@ func GetUncheckinProviders(c *gin.Context) {
 }
 
 func TriggerFullCheckinRunHandler(c *gin.Context) {
-	run, err := service.TriggerFullCheckinRun("manual")
+	run, err := service.TriggerUncheckedCheckinRun("manual")
 	if err != nil {
 		if errors.Is(err, service.ErrCheckinRunInProgress) {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "签到任务正在执行中，请稍后再试"})
@@ -279,14 +288,36 @@ func CreateProvider(c *gin.Context) {
 }
 
 func UpdateProvider(c *gin.Context) {
-	var provider model.Provider
-	if err := json.NewDecoder(c.Request.Body).Decode(&provider); err != nil || provider.Id == 0 {
+	rawBody, readErr := io.ReadAll(c.Request.Body)
+	if readErr != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的参数"})
 		return
 	}
+
+	var provider model.Provider
+	if err := json.Unmarshal(rawBody, &provider); err != nil || provider.Id == 0 {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的参数"})
+		return
+	}
+
+	var checkinPayload struct {
+		CheckinEnabled *bool `json:"checkin_enabled"`
+	}
+	if err := json.Unmarshal(rawBody, &checkinPayload); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的参数"})
+		return
+	}
+
 	if err := provider.Update(); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
+	}
+
+	if checkinPayload.CheckinEnabled != nil {
+		if err := (&model.Provider{Id: provider.Id}).UpdateCheckinEnabled(*checkinPayload.CheckinEnabled); err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
@@ -595,11 +626,7 @@ func CreateProviderToken(c *gin.Context) {
 		return
 	}
 	// Sync tokens back to get the newly created token
-	go func() {
-		if err := service.SyncProvider(provider); err != nil {
-			common.SysLog("sync after create token failed: " + err.Error())
-		}
-	}()
+	syncProviderAfterTokenCreate(provider)
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Token 已在上游创建，正在同步回本地"})
 }
 

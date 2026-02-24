@@ -158,7 +158,7 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 | GET | `/api/provider/checkin/summary` | 获取签到任务汇总（支持 `?limit=`） |
 | GET | `/api/provider/checkin/messages` | 获取签到结果消息（支持 `?limit=`） |
 | GET | `/api/provider/checkin/uncheckin` | 获取当日未签到渠道列表 |
-| POST | `/api/provider/checkin/run` | 触发全量签到任务 |
+| POST | `/api/provider/checkin/run` | 触发未签到渠道签到任务（仅执行当日未签到且已启用签到的渠道） |
 | GET | `/api/provider/:id` | 供应商详情 |
 | POST | `/api/provider/` | 创建供应商 |
 | PUT | `/api/provider/` | 更新供应商 |
@@ -178,6 +178,7 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 - `GET /api/provider/:id/pricing` 额外返回：
   - `token_group_options`：可用于创建上游 token 的分组选项（含 `group_name`、`ratio`）。
   - `default_group`：推荐默认分组（优先上游默认分组，否则倍率最低分组）。
+- `PUT /api/provider/` 当请求体包含 `checkin_enabled` 时，会显式持久化该字段，支持可靠写入 `false`（取消签到）。
 - `POST /api/provider/:id/tokens` 新增服务端校验：
   - `group_name` 不能为空。
   - `group_name` 必须属于当前渠道可用分组，否则返回校验错误。

@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,7 +12,8 @@ import (
 
 func prepareCheckinTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:model_checkin_test_%s_%d?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"), time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open test db failed: %v", err)
 	}
@@ -118,5 +121,52 @@ func TestExistsCheckinRunByTriggerAndScheduledDate(t *testing.T) {
 	}
 	if exists {
 		t.Fatalf("expected no checkin run for non-existing scheduled date")
+	}
+}
+
+func TestUpdateCheckinEnabledFalsePersistsAndExcludesFromUncheckin(t *testing.T) {
+	originDB := DB
+	DB = prepareCheckinTestDB(t)
+	defer func() { DB = originDB }()
+
+	dayStart := time.Now().Add(-2 * time.Hour).Unix()
+	provider := &Provider{
+		Name:           "toggle-provider",
+		BaseURL:        "https://toggle.example.com",
+		AccessToken:    "token",
+		Status:         1,
+		CheckinEnabled: true,
+		LastCheckinAt:  dayStart - 100,
+	}
+	if err := provider.Insert(); err != nil {
+		t.Fatalf("insert provider failed: %v", err)
+	}
+
+	uncheckedBeforeDisable, err := GetUncheckinProviders(dayStart)
+	if err != nil {
+		t.Fatalf("query uncheckin providers before disable failed: %v", err)
+	}
+	if len(uncheckedBeforeDisable) != 1 {
+		t.Fatalf("expected provider in unchecked set before disable, got %d", len(uncheckedBeforeDisable))
+	}
+
+	if err := provider.UpdateCheckinEnabled(false); err != nil {
+		t.Fatalf("disable checkin failed: %v", err)
+	}
+
+	reloaded, err := GetProviderById(provider.Id)
+	if err != nil {
+		t.Fatalf("reload provider failed: %v", err)
+	}
+	if reloaded.CheckinEnabled {
+		t.Fatalf("expected checkin_enabled to persist as false")
+	}
+
+	uncheckedAfterDisable, err := GetUncheckinProviders(dayStart)
+	if err != nil {
+		t.Fatalf("query uncheckin providers after disable failed: %v", err)
+	}
+	if len(uncheckedAfterDisable) != 0 {
+		t.Fatalf("expected disabled provider excluded from unchecked set, got %d", len(uncheckedAfterDisable))
 	}
 }

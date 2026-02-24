@@ -104,9 +104,32 @@ describe('ProvidersTable', () => {
     await flushPromises();
 
     expect(container.textContent).toContain('签到任务概览');
+    expect(container.textContent).toContain('签到未签到渠道');
     expect(container.textContent).toContain('Provider-A');
     expect(container.textContent).toContain('奖励额度：$1.00');
     expect(container.textContent).toContain('今日所有已启用签到渠道均已签到');
+  });
+
+  it('triggers unchecked-only checkin run from overview action', async () => {
+    API.post.mockResolvedValue({
+      data: { success: true, message: '' },
+    });
+
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const runButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('签到未签到渠道'));
+    expect(runButton).not.toBeNull();
+
+    await act(async () => {
+      runButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(API.post).toHaveBeenCalledWith('/api/provider/checkin/run');
   });
 
   it('keeps add-provider modal open when overlay is clicked', async () => {
@@ -475,5 +498,110 @@ describe('ProvidersTable', () => {
 
     expect(showError).toHaveBeenCalledWith('enable failed');
     expect(container.textContent).toContain('未启用');
+  });
+
+  it('disables checkin from provider list with one click', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.startsWith('/api/provider/?p=')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            message: '',
+            data: [
+              {
+                id: 3,
+                name: 'Provider-C',
+                base_url: 'https://example.com',
+                created_at: 1730000000,
+                status: 1,
+                checkin_enabled: true,
+                weight: 10,
+                priority: 0,
+              },
+            ],
+          },
+        });
+      }
+      if (url === '/api/provider/checkin/summary?limit=1') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      if (url === '/api/provider/checkin/messages?limit=20') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      if (url === '/api/provider/checkin/uncheckin') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      return Promise.resolve({ data: { success: true, data: [] } });
+    });
+    API.put.mockResolvedValue({ data: { success: true, message: '' } });
+
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const disableButton = container.querySelector('button[title="一键取消签到"]');
+    expect(disableButton).not.toBeNull();
+
+    await act(async () => {
+      disableButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(API.put).toHaveBeenCalledWith('/api/provider/', { id: 3, checkin_enabled: false });
+  });
+
+  it('rolls back one-click disable state when API fails', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.startsWith('/api/provider/?p=')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            message: '',
+            data: [
+              {
+                id: 4,
+                name: 'Provider-D',
+                base_url: 'https://example.com',
+                created_at: 1730000000,
+                status: 1,
+                checkin_enabled: true,
+                weight: 10,
+                priority: 0,
+              },
+            ],
+          },
+        });
+      }
+      if (url === '/api/provider/checkin/summary?limit=1') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      if (url === '/api/provider/checkin/messages?limit=20') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      if (url === '/api/provider/checkin/uncheckin') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      return Promise.resolve({ data: { success: true, data: [] } });
+    });
+    API.put.mockResolvedValue({ data: { success: false, message: 'disable failed' } });
+
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const disableButton = container.querySelector('button[title="一键取消签到"]');
+    expect(disableButton).not.toBeNull();
+
+    await act(async () => {
+      disableButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(showError).toHaveBeenCalledWith('disable failed');
+    expect(container.textContent).toContain('已启用');
   });
 });

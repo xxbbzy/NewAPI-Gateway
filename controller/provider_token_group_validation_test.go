@@ -197,6 +197,12 @@ func TestCreateProviderTokenAcceptsValidGroup(t *testing.T) {
 	model.DB = prepareProviderTokenValidationTestDB(t)
 	defer func() { model.DB = originDB }()
 
+	originSyncProviderAfterTokenCreate := syncProviderAfterTokenCreate
+	syncProviderAfterTokenCreate = func(provider *model.Provider) {}
+	defer func() {
+		syncProviderAfterTokenCreate = originSyncProviderAfterTokenCreate
+	}()
+
 	gin.SetMode(gin.TestMode)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
