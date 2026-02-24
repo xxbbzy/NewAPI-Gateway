@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var (
@@ -26,7 +27,13 @@ func printHelp() {
 }
 
 func init() {
-	flag.Parse()
+	// `go test` injects testing flags (for example `-test.testlogfile`)
+	// that this binary flag set does not define.
+	if strings.HasSuffix(os.Args[0], ".test") {
+		_ = flag.CommandLine.Parse([]string{})
+	} else {
+		flag.Parse()
+	}
 
 	if *PrintVersion {
 		fmt.Println(Version)

@@ -7,7 +7,7 @@ import (
 )
 
 var syncTicker *time.Ticker
-var checkinTicker *time.Ticker
+var checkinSchedulerTicker *time.Ticker
 var stopCron chan bool
 
 // StartCronJobs starts background sync and checkin tasks
@@ -16,25 +16,26 @@ func StartCronJobs() {
 
 	// Sync every 5 minutes
 	syncTicker = time.NewTicker(5 * time.Minute)
-	// Checkin every 24 hours
-	checkinTicker = time.NewTicker(24 * time.Hour)
+	// Check checkin schedule every minute
+	checkinSchedulerTicker = time.NewTicker(1 * time.Minute)
 
 	go func() {
 		for {
 			select {
 			case <-syncTicker.C:
-				syncAllProviders()
-			case <-checkinTicker.C:
-				CheckinAllProviders()
+				go syncAllProviders()
+			case <-checkinSchedulerTicker.C:
+				go RunScheduledCheckinIfNeeded(time.Now())
 			case <-stopCron:
 				syncTicker.Stop()
-				checkinTicker.Stop()
+				checkinSchedulerTicker.Stop()
 				return
 			}
 		}
 	}()
 
-	common.SysLog("cron jobs started: sync every 5m, checkin every 24h")
+	go RunScheduledCheckinIfNeeded(time.Now())
+	common.SysLog("cron jobs started: sync every 5m, scheduled checkin evaluated every 1m")
 }
 
 // StopCronJobs stops background tasks

@@ -27,6 +27,17 @@
 - 后台：`供应商 -> 签到`
 - API：`POST /api/provider/:id/checkin`
 
+### 手动触发全量签到
+
+- 后台：`供应商 -> 立即全量签到`
+- API：`POST /api/provider/checkin/run`
+
+### 查看签到结果与未签到渠道
+
+- 签到汇总：`GET /api/provider/checkin/summary?limit=1`
+- 签到消息：`GET /api/provider/checkin/messages?limit=20`
+- 未签到渠道：`GET /api/provider/checkin/uncheckin`
+
 ### 全量重建路由
 
 - API：`POST /api/route/rebuild`

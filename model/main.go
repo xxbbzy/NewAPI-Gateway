@@ -150,6 +150,14 @@ func InitDB() (err error) {
 		if err != nil {
 			return err
 		}
+		err = db.AutoMigrate(&CheckinRun{})
+		if err != nil {
+			return err
+		}
+		err = db.AutoMigrate(&CheckinRunItem{})
+		if err != nil {
+			return err
+		}
 		err = createRootAccountIfNeed()
 		return err
 	} else {

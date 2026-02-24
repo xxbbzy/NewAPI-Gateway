@@ -9,3 +9,7 @@ node_modules
 /logs
 /yewu
 .DS_Store
+.claude
+.opencode
+.codex
+openspec

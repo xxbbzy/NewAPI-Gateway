@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func GetOptions(c *gin.Context) {
@@ -63,6 +64,31 @@ func UpdateOption(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "无法启用 Turnstile 校验，请先填入 Turnstile 校验相关配置信息！",
+			})
+			return
+		}
+	case "CheckinScheduleEnabled":
+		normalized := strings.TrimSpace(strings.ToLower(option.Value))
+		if normalized != "true" && normalized != "false" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "签到定时任务开关必须是 true 或 false",
+			})
+			return
+		}
+	case "CheckinScheduleTime":
+		if _, err := time.Parse("15:04", strings.TrimSpace(option.Value)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "签到时间格式必须是 HH:mm（24 小时制）",
+			})
+			return
+		}
+	case "CheckinScheduleTimezone":
+		if _, err := time.LoadLocation(strings.TrimSpace(option.Value)); err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "签到时区必须是有效的 IANA 时区，例如 Asia/Shanghai",
 			})
 			return
 		}

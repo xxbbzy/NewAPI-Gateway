@@ -21,10 +21,18 @@ func UpsertModelPricing(p *ModelPricing) error {
 	result := DB.Where("model_name = ? AND provider_id = ?", p.ModelName, p.ProviderId).First(&existing)
 	if result.RowsAffected > 0 {
 		p.Id = existing.Id
-		return DB.Model(&existing).Updates(p).Error
+		if err := DB.Model(&existing).Updates(p).Error; err != nil {
+			return err
+		}
+		invalidateModelRouteCaches()
+		return nil
 	}
 	p.LastSynced = time.Now().Unix()
-	return DB.Create(p).Error
+	if err := DB.Create(p).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 func GetModelPricingByProvider(providerId int) ([]*ModelPricing, error) {
@@ -50,5 +58,9 @@ func GetAllModelPricing() ([]*ModelPricing, error) {
 
 // DeletePricingForProvider removes all pricing records for a provider
 func DeletePricingForProvider(providerId int) error {
-	return DB.Where("provider_id = ?", providerId).Delete(&ModelPricing{}).Error
+	if err := DB.Where("provider_id = ?", providerId).Delete(&ModelPricing{}).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }

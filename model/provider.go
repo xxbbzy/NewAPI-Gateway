@@ -4,6 +4,8 @@ import (
 	"NewAPI-Gateway/common"
 	"errors"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type Provider struct {
@@ -24,6 +26,10 @@ type Provider struct {
 	ModelAliasMapping        string `json:"model_alias_mapping" gorm:"type:text"`
 	Remark                   string `json:"remark" gorm:"type:text"`
 	CreatedAt                int64  `json:"created_at"`
+	LastCheckinStatus        string `json:"last_checkin_status" gorm:"-"`
+	LastCheckinMessage       string `json:"last_checkin_message" gorm:"-"`
+	LastCheckinQuotaAwarded  int64  `json:"last_checkin_quota_awarded" gorm:"-"`
+	LastCheckinResultAt      int64  `json:"last_checkin_result_at" gorm:"-"`
 }
 
 func GetAllProviders(startIdx int, num int) ([]*Provider, error) {
@@ -53,24 +59,54 @@ func GetCheckinEnabledProviders() ([]*Provider, error) {
 	return providers, err
 }
 
+func GetUncheckinProviders(dayStart int64) ([]*Provider, error) {
+	var providers []*Provider
+	err := DB.Where(
+		"status = ? AND checkin_enabled = ? AND last_checkin_at < ?",
+		common.UserStatusEnabled,
+		true,
+		dayStart,
+	).Order("id desc").Find(&providers).Error
+	return providers, err
+}
+
 func (p *Provider) Insert() error {
 	p.CreatedAt = time.Now().Unix()
 	return DB.Create(p).Error
 }
 
 func (p *Provider) Update() error {
-	return DB.Model(p).Updates(p).Error
+	if err := DB.Model(p).Updates(p).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 func (p *Provider) Delete() error {
 	if p.Id == 0 {
 		return errors.New("id 为空")
 	}
-	// Also clean up related provider_tokens and model_routes
-	DB.Where("provider_id = ?", p.Id).Delete(&ProviderToken{})
-	DB.Where("provider_id = ?", p.Id).Delete(&ModelRoute{})
-	DB.Where("provider_id = ?", p.Id).Delete(&ModelPricing{})
-	return DB.Delete(p).Error
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("provider_id = ?", p.Id).Delete(&ProviderToken{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("provider_id = ?", p.Id).Delete(&ModelRoute{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("provider_id = ?", p.Id).Delete(&ModelPricing{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&Provider{}, "id = ?", p.Id).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 func (p *Provider) UpdateBalance(balance string) {
@@ -78,22 +114,33 @@ func (p *Provider) UpdateBalance(balance string) {
 		"balance":         balance,
 		"balance_updated": time.Now().Unix(),
 	})
+	invalidateModelRouteCaches()
 }
 
 func (p *Provider) UpdatePricingGroupRatio(groupRatio string) {
 	DB.Model(p).Update("pricing_group_ratio", groupRatio)
+	invalidateModelRouteCaches()
 }
 
 func (p *Provider) UpdatePricingSupportedEndpoint(supportedEndpoint string) {
 	DB.Model(p).Update("pricing_supported_endpoint", supportedEndpoint)
+	invalidateModelRouteCaches()
 }
 
 func (p *Provider) UpdateModelAliasMapping(modelAliasMapping string) {
 	DB.Model(p).Update("model_alias_mapping", modelAliasMapping)
+	invalidateModelRouteCaches()
 }
 
 func (p *Provider) UpdateCheckinTime() {
 	DB.Model(p).Update("last_checkin_at", time.Now().Unix())
+}
+
+func (p *Provider) UpdateCheckinEnabled(enabled bool) error {
+	if p.Id == 0 {
+		return errors.New("id 为空")
+	}
+	return DB.Model(p).Update("checkin_enabled", enabled).Error
 }
 
 // CleanForResponse removes sensitive fields before sending to frontend

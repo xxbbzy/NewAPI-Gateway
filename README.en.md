@@ -142,6 +142,10 @@ For complete endpoint and auth details, see [`docs/API_REFERENCE.md`](./docs/API
 | Provider  | GET/POST/PUT/DELETE | `/api/provider/`            | Provider CRUD         |
 | Provider  | POST                | `/api/provider/:id/sync`    | Trigger sync          |
 | Provider  | POST                | `/api/provider/:id/checkin` | Manual check-in       |
+| Provider  | POST                | `/api/provider/checkin/run` | Trigger full check-in |
+| Provider  | GET                 | `/api/provider/checkin/summary` | Check-in summaries |
+| Provider  | GET                 | `/api/provider/checkin/messages` | Check-in messages |
+| Provider  | GET                 | `/api/provider/checkin/uncheckin` | Unchecked providers |
 | Token     | GET/POST/PUT/DELETE | `/api/agg-token/`           | Aggregated token CRUD |
 | Route     | GET                 | `/api/route/`               | View route table      |
 | Route     | POST                | `/api/route/rebuild`        | Rebuild routes        |

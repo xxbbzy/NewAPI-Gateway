@@ -9,7 +9,8 @@ const Button = ({
     disabled = false,
     onClick,
     type = 'button',
-    icon: Icon
+    icon: Icon,
+    ...rest
 }) => {
     const baseStyles = {
         display: 'inline-flex',
@@ -65,6 +66,7 @@ const Button = ({
 
     return (
         <button
+            {...rest}
             type={type}
             style={style}
             className={className}

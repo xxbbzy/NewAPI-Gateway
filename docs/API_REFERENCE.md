@@ -127,6 +127,9 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 
 | Key | 类型 | 默认值 | 取值范围 | 说明 |
 | --- | --- | --- | --- | --- |
+| `CheckinScheduleEnabled` | bool | `true` | `true/false` | 是否启用每日自动签到任务 |
+| `CheckinScheduleTime` | string | `"09:00"` | `HH:mm` | 每日签到执行时间（24 小时制） |
+| `CheckinScheduleTimezone` | string | `"Asia/Shanghai"` | IANA 时区 | 每日签到任务使用的时区 |
 | `RoutingUsageWindowHours` | int | `24` | `1 ~ 720` | 计算 `recent_usage_cost_usd` 的统计窗口（小时） |
 | `RoutingBaseWeightFactor` | float | `0.2` | `0 ~ 10` | 占比贡献中的基础系数 |
 | `RoutingValueScoreFactor` | float | `0.8` | `0 ~ 10` | 占比贡献中的性价比系数 |
@@ -152,6 +155,10 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 | GET | `/api/provider/` | 供应商列表 |
 | GET | `/api/provider/export` | 导出供应商 |
 | POST | `/api/provider/import` | 导入供应商 |
+| GET | `/api/provider/checkin/summary` | 获取签到任务汇总（支持 `?limit=`） |
+| GET | `/api/provider/checkin/messages` | 获取签到结果消息（支持 `?limit=`） |
+| GET | `/api/provider/checkin/uncheckin` | 获取当日未签到渠道列表 |
+| POST | `/api/provider/checkin/run` | 触发全量签到任务 |
 | GET | `/api/provider/:id` | 供应商详情 |
 | POST | `/api/provider/` | 创建供应商 |
 | PUT | `/api/provider/` | 更新供应商 |

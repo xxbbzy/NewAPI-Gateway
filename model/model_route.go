@@ -328,31 +328,7 @@ func BuildRouteAttemptsByPriority(modelName string) ([][]RouteAttempt, error) {
 }
 
 func getCandidateRoutesByModel(requestedModel string) ([]ModelRoute, error) {
-	var allRoutes []ModelRoute
-	if err := DB.Where("enabled = ?", true).
-		Order("priority DESC, id ASC").Find(&allRoutes).Error; err != nil {
-		return nil, err
-	}
-	if len(allRoutes) == 0 {
-		return nil, nil
-	}
-
-	providerAliasLookupMap, err := loadProviderAliasLookups(allRoutes)
-	if err != nil {
-		return nil, err
-	}
-
-	requestedNormalized := common.NormalizeModelName(requestedModel)
-	requestedVersionKey := common.ToVersionAgnosticKey(requestedNormalized)
-
-	candidates := make([]ModelRoute, 0, len(allRoutes))
-	for _, route := range allRoutes {
-		lookup := providerAliasLookupMap[route.ProviderId]
-		if routeMatchesRequestedModel(route.ModelName, requestedModel, requestedNormalized, requestedVersionKey, lookup) {
-			candidates = append(candidates, route)
-		}
-	}
-	return candidates, nil
+	return getCandidateRoutesByModelCached(requestedModel)
 }
 
 func loadProviderAliasLookups(routes []ModelRoute) (map[int]providerModelAliasLookup, error) {
@@ -418,13 +394,30 @@ func loadProvidersByIDs(providerIds []int) (map[int]*Provider, error) {
 	if len(providerIds) == 0 {
 		return lookup, nil
 	}
-	var providers []Provider
-	if err := DB.Where("id IN ?", providerIds).Find(&providers).Error; err != nil {
-		return nil, err
+
+	missingIds := make([]int, 0, len(providerIds))
+	snapshot, snapshotErr := getRoutingStaticSnapshot()
+	if snapshotErr == nil && snapshot != nil {
+		for _, id := range providerIds {
+			if provider, ok := snapshot.providersByID[id]; ok {
+				lookup[id] = provider
+				continue
+			}
+			missingIds = append(missingIds, id)
+		}
+	} else {
+		missingIds = append(missingIds, providerIds...)
 	}
-	for i := range providers {
-		provider := providers[i]
-		lookup[provider.Id] = &provider
+
+	if len(missingIds) > 0 {
+		var providers []Provider
+		if err := DB.Where("id IN ?", missingIds).Find(&providers).Error; err != nil {
+			return nil, err
+		}
+		for i := range providers {
+			provider := &providers[i]
+			lookup[provider.Id] = provider
+		}
 	}
 	return lookup, nil
 }
@@ -434,13 +427,30 @@ func loadProviderTokensByIDs(tokenIds []int) (map[int]*ProviderToken, error) {
 	if len(tokenIds) == 0 {
 		return lookup, nil
 	}
-	var tokens []ProviderToken
-	if err := DB.Where("id IN ?", tokenIds).Find(&tokens).Error; err != nil {
-		return nil, err
+
+	missingIds := make([]int, 0, len(tokenIds))
+	snapshot, snapshotErr := getRoutingStaticSnapshot()
+	if snapshotErr == nil && snapshot != nil {
+		for _, id := range tokenIds {
+			if token, ok := snapshot.tokensByID[id]; ok {
+				lookup[id] = token
+				continue
+			}
+			missingIds = append(missingIds, id)
+		}
+	} else {
+		missingIds = append(missingIds, tokenIds...)
 	}
-	for i := range tokens {
-		token := tokens[i]
-		lookup[token.Id] = &token
+
+	if len(missingIds) > 0 {
+		var tokens []ProviderToken
+		if err := DB.Where("id IN ?", missingIds).Find(&tokens).Error; err != nil {
+			return nil, err
+		}
+		for i := range tokens {
+			token := &tokens[i]
+			lookup[token.Id] = token
+		}
 	}
 	return lookup, nil
 }
@@ -468,15 +478,9 @@ func buildRouteRuntimeMetrics(routes []ModelRoute, providers map[int]*Provider, 
 		tokenGroupLookup[tokenId] = token.GroupName
 	}
 
-	pricingLookup := make(map[string]ModelPricing)
-	if len(providerIds) > 0 && len(modelNames) > 0 {
-		var pricings []ModelPricing
-		if err := DB.Where("provider_id IN ? AND model_name IN ?", providerIds, modelNames).Find(&pricings).Error; err != nil {
-			return nil, err
-		}
-		for _, pricing := range pricings {
-			pricingLookup[routePricingKey(pricing.ProviderId, pricing.ModelName)] = pricing
-		}
+	pricingLookup, err := loadPricingLookupByProviderModels(providerIds, modelNames)
+	if err != nil {
+		return nil, err
 	}
 
 	usageLookup, err := loadRecentUsageCostByTokenModel(tokenIds, modelNames, config.UsageWindowHours)
@@ -803,6 +807,12 @@ func loadRecentUsageCostByTokenModel(tokenIds []int, modelNames []string, usageW
 	if len(tokenIds) == 0 || len(modelNames) == 0 {
 		return usageLookup, nil
 	}
+	if usageWindowHours <= 0 {
+		usageWindowHours = defaultRoutingUsageWindowHours
+	}
+	if cached, ok := getCachedRecentUsageCostByTokenModel(tokenIds, modelNames, usageWindowHours); ok {
+		return cached, nil
+	}
 
 	type usageRow struct {
 		ProviderTokenId int     `gorm:"column:provider_token_id"`
@@ -810,9 +820,6 @@ func loadRecentUsageCostByTokenModel(tokenIds []int, modelNames []string, usageW
 		TotalCost       float64 `gorm:"column:total_cost"`
 	}
 	var rows []usageRow
-	if usageWindowHours <= 0 {
-		usageWindowHours = defaultRoutingUsageWindowHours
-	}
 	since := time.Now().Add(-time.Duration(usageWindowHours) * time.Hour).Unix()
 	if err := DB.Table("usage_logs").
 		Select("provider_token_id, model_name, COALESCE(SUM(cost_usd), 0) AS total_cost").
@@ -824,6 +831,7 @@ func loadRecentUsageCostByTokenModel(tokenIds []int, modelNames []string, usageW
 	for _, row := range rows {
 		usageLookup[routeUsageKey(row.ProviderTokenId, row.ModelName)] = row.TotalCost
 	}
+	setCachedRecentUsageCostByTokenModel(tokenIds, modelNames, usageWindowHours, usageLookup)
 	return usageLookup, nil
 }
 
@@ -834,6 +842,9 @@ func loadRouteHealthStatsByTokenModel(tokenIds []int, modelNames []string, windo
 	}
 	if windowHours <= 0 {
 		windowHours = defaultRoutingHealthWindowHour
+	}
+	if cached, ok := getCachedRouteHealthStatsByTokenModel(tokenIds, modelNames, windowHours); ok {
+		return cached, nil
 	}
 
 	type healthRow struct {
@@ -881,6 +892,7 @@ func loadRouteHealthStatsByTokenModel(tokenIds []int, modelNames []string, windo
 			FailRate:     failRate,
 		}
 	}
+	setCachedRouteHealthStatsByTokenModel(tokenIds, modelNames, windowHours, statsLookup)
 	return statsLookup, nil
 }
 
@@ -967,7 +979,11 @@ func GetDistinctModels() ([]string, error) {
 }
 
 func (r *ModelRoute) Update() error {
-	return DB.Model(r).Updates(r).Error
+	if err := DB.Model(r).Updates(r).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 func UpdateModelRouteFields(id int, updates map[string]interface{}) error {
@@ -977,7 +993,11 @@ func UpdateModelRouteFields(id int, updates map[string]interface{}) error {
 	if len(updates) == 0 {
 		return errors.New("没有可更新的字段")
 	}
-	return DB.Model(&ModelRoute{}).Where("id = ?", id).Updates(updates).Error
+	if err := DB.Model(&ModelRoute{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 func BatchUpdateModelRoutes(patches []ModelRoutePatch) error {
@@ -999,7 +1019,11 @@ func BatchUpdateModelRoutes(patches []ModelRoutePatch) error {
 			return err
 		}
 	}
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 func GetModelRouteOverview(modelName string, providerId int, enabledOnly bool) ([]*ModelRouteOverviewItem, error) {
@@ -1299,7 +1323,11 @@ func RebuildRoutesForProvider(providerId int, routes []ModelRoute) error {
 		}
 	}
 
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 func CountModelRoutes() int64 {

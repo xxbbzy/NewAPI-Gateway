@@ -49,6 +49,9 @@ func InitOptionMap() {
 	common.OptionMap["WeChatAccountQRCodeImageURL"] = ""
 	common.OptionMap["TurnstileSiteKey"] = ""
 	common.OptionMap["TurnstileSecretKey"] = ""
+	common.OptionMap["CheckinScheduleEnabled"] = strconv.FormatBool(common.CheckinScheduleEnabled)
+	common.OptionMap["CheckinScheduleTime"] = common.CheckinScheduleTime
+	common.OptionMap["CheckinScheduleTimezone"] = common.CheckinScheduleTimezone
 	common.OptionMap["RoutingUsageWindowHours"] = strconv.Itoa(24)
 	common.OptionMap["RoutingBaseWeightFactor"] = "0.2"
 	common.OptionMap["RoutingValueScoreFactor"] = "0.8"
@@ -117,6 +120,8 @@ func updateOptionMap(key string, value string) {
 			common.TurnstileCheckEnabled = boolValue
 		case "RegisterEnabled":
 			common.RegisterEnabled = boolValue
+		case "CheckinScheduleEnabled":
+			common.CheckinScheduleEnabled = boolValue
 		}
 	}
 	switch key {
@@ -151,5 +156,9 @@ func updateOptionMap(key string, value string) {
 		common.TurnstileSiteKey = value
 	case "TurnstileSecretKey":
 		common.TurnstileSecretKey = value
+	case "CheckinScheduleTime":
+		common.CheckinScheduleTime = value
+	case "CheckinScheduleTimezone":
+		common.CheckinScheduleTimezone = value
 	}
 }

@@ -194,6 +194,10 @@ curl https://your-gateway.com/v1/chat/completions \
 | DELETE | `/api/provider/:id`         | 删除供应商       |
 | POST   | `/api/provider/:id/sync`    | 触发同步         |
 | POST   | `/api/provider/:id/checkin` | 手动签到         |
+| POST   | `/api/provider/checkin/run` | 触发全量签到     |
+| GET    | `/api/provider/checkin/summary` | 获取签到任务汇总 |
+| GET    | `/api/provider/checkin/messages` | 获取签到结果消息 |
+| GET    | `/api/provider/checkin/uncheckin` | 获取未签到渠道列表 |
 | GET    | `/api/provider/:id/tokens`  | 查看供应商 Token |
 
 #### 聚合 Token 管理（User）

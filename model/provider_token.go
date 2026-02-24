@@ -46,17 +46,31 @@ func GetProviderTokenById(id int) (*ProviderToken, error) {
 
 func (pt *ProviderToken) Insert() error {
 	pt.CreatedAt = time.Now().Unix()
-	return DB.Create(pt).Error
+	if err := DB.Create(pt).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 func (pt *ProviderToken) Update() error {
-	return DB.Model(pt).Updates(pt).Error
+	if err := DB.Model(pt).Updates(pt).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 func (pt *ProviderToken) Delete() error {
 	// Clean up related model_routes
-	DB.Where("provider_token_id = ?", pt.Id).Delete(&ModelRoute{})
-	return DB.Delete(pt).Error
+	if err := DB.Where("provider_token_id = ?", pt.Id).Delete(&ModelRoute{}).Error; err != nil {
+		return err
+	}
+	if err := DB.Delete(pt).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 // UpsertByUpstreamId creates or updates a provider token based on upstream token id + provider id
@@ -67,19 +81,35 @@ func UpsertProviderToken(pt *ProviderToken) error {
 		// Update existing
 		pt.Id = existing.Id
 		pt.CreatedAt = existing.CreatedAt
-		return DB.Model(&existing).Updates(pt).Error
+		if err := DB.Model(&existing).Updates(pt).Error; err != nil {
+			return err
+		}
+		invalidateModelRouteCaches()
+		return nil
 	}
 	// Create new
 	pt.CreatedAt = time.Now().Unix()
-	return DB.Create(pt).Error
+	if err := DB.Create(pt).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 // DeleteProviderTokensNotInIds deletes tokens for a provider that are NOT in the given upstream token ID list
 func DeleteProviderTokensNotInIds(providerId int, upstreamIds []int) error {
 	if len(upstreamIds) == 0 {
-		return DB.Where("provider_id = ?", providerId).Delete(&ProviderToken{}).Error
+		if err := DB.Where("provider_id = ?", providerId).Delete(&ProviderToken{}).Error; err != nil {
+			return err
+		}
+		invalidateModelRouteCaches()
+		return nil
 	}
-	return DB.Where("provider_id = ? AND upstream_token_id NOT IN (?)", providerId, upstreamIds).Delete(&ProviderToken{}).Error
+	if err := DB.Where("provider_id = ? AND upstream_token_id NOT IN (?)", providerId, upstreamIds).Delete(&ProviderToken{}).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
 }
 
 // CleanForResponse removes sensitive sk_key before sending to frontend

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -82,7 +83,31 @@ type UpstreamUserSelf struct {
 
 // CheckinResponse for the checkin endpoint
 type CheckinResponse struct {
-	QuotaAwarded int64 `json:"quota_awarded"`
+	QuotaAwarded int64  `json:"quota_awarded"`
+	Message      string `json:"-"`
+}
+
+var idempotentCheckinMessagePatterns = []string{
+	"今日已签到",
+	"alreadycheckedintoday",
+}
+
+func normalizeCheckinMessage(message string) string {
+	compact := strings.Join(strings.Fields(strings.TrimSpace(message)), "")
+	return strings.ToLower(compact)
+}
+
+func isIdempotentCheckinMessage(message string) bool {
+	normalized := normalizeCheckinMessage(message)
+	if normalized == "" {
+		return false
+	}
+	for _, pattern := range idempotentCheckinMessagePatterns {
+		if strings.Contains(normalized, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *UpstreamClient) doRequest(method string, path string) ([]byte, error) {
@@ -288,7 +313,15 @@ func (c *UpstreamClient) Checkin() (*CheckinResponse, error) {
 		return nil, err
 	}
 	if !result.Success {
+		message := strings.TrimSpace(result.Message)
+		if isIdempotentCheckinMessage(message) {
+			result.Data.Message = message
+			return &result.Data, nil
+		}
 		return nil, fmt.Errorf("checkin failed: %s", result.Message)
+	}
+	if strings.TrimSpace(result.Data.Message) == "" {
+		result.Data.Message = strings.TrimSpace(result.Message)
 	}
 	return &result.Data, nil
 }

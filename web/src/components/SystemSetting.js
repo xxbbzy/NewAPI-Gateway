@@ -23,6 +23,9 @@ const SystemSetting = () => {
     TurnstileSiteKey: '',
     TurnstileSecretKey: '',
     RegisterEnabled: '',
+    CheckinScheduleEnabled: 'true',
+    CheckinScheduleTime: '09:00',
+    CheckinScheduleTimezone: 'Asia/Shanghai',
     RoutingUsageWindowHours: '24',
     RoutingBaseWeightFactor: '0.2',
     RoutingValueScoreFactor: '0.8',
@@ -71,6 +74,7 @@ const SystemSetting = () => {
       case 'GitHubOAuthEnabled':
       case 'TurnstileCheckEnabled':
       case 'RegisterEnabled':
+      case 'CheckinScheduleEnabled':
       case 'RoutingHealthAdjustmentEnabled':
         value = inputs[key] === 'true' ? 'false' : 'true';
         break;
@@ -101,6 +105,8 @@ const SystemSetting = () => {
       name === 'GitHubClientSecret' ||
       name === 'TurnstileSiteKey' ||
       name === 'TurnstileSecretKey' ||
+      name === 'CheckinScheduleTime' ||
+      name === 'CheckinScheduleTimezone' ||
       name === 'RoutingUsageWindowHours' ||
       name === 'RoutingBaseWeightFactor' ||
       name === 'RoutingValueScoreFactor' ||
@@ -271,6 +277,27 @@ const SystemSetting = () => {
     }
   };
 
+  const submitCheckinSchedule = async () => {
+    const scheduleTime = String(inputs.CheckinScheduleTime || '').trim();
+    const scheduleTimezone = String(inputs.CheckinScheduleTimezone || '').trim();
+
+    if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(scheduleTime)) {
+      showError('签到时间格式必须是 HH:mm（24 小时制）');
+      return;
+    }
+    if (scheduleTimezone === '') {
+      showError('签到时区不能为空（例如 Asia/Shanghai）');
+      return;
+    }
+
+    if (originInputs['CheckinScheduleTime'] !== scheduleTime) {
+      await updateOption('CheckinScheduleTime', scheduleTime);
+    }
+    if (originInputs['CheckinScheduleTimezone'] !== scheduleTimezone) {
+      await updateOption('CheckinScheduleTimezone', scheduleTimezone);
+    }
+  };
+
   const Checkbox = ({ label, name, checked, onChange }) => (
     <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.75rem' }}>
       <input
@@ -348,6 +375,38 @@ const SystemSetting = () => {
             onChange={handleCheckboxChange}
           />
         </div>
+      </Card>
+
+      <Card padding="1.5rem">
+        <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>签到任务设置</h3>
+        <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+          配置每日自动签到时间和时区。系统会在配置时间点（及其后首次调度窗口）执行一次全量签到。
+        </p>
+        <div style={{ marginBottom: '1rem' }}>
+          <Checkbox
+            checked={inputs.CheckinScheduleEnabled === 'true'}
+            label='启用每日自动签到任务'
+            name='CheckinScheduleEnabled'
+            onChange={handleCheckboxChange}
+          />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+          <Input
+            label='签到时间（HH:mm）'
+            name='CheckinScheduleTime'
+            onChange={handleInputChange}
+            value={inputs.CheckinScheduleTime}
+            placeholder='09:00'
+          />
+          <Input
+            label='签到时区（IANA）'
+            name='CheckinScheduleTimezone'
+            onChange={handleInputChange}
+            value={inputs.CheckinScheduleTimezone}
+            placeholder='Asia/Shanghai'
+          />
+        </div>
+        <Button onClick={submitCheckinSchedule} variant="secondary" disabled={loading}>保存签到任务设置</Button>
       </Card>
 
       <Card padding="1.5rem">

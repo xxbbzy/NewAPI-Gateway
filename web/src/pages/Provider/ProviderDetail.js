@@ -9,7 +9,7 @@ import {
     Edit,
     GitBranch
 } from 'lucide-react';
-import { API, showError, showSuccess } from '../../helpers';
+import { API, showError, showSuccess, timestamp2string } from '../../helpers';
 import { Table, Thead, Tbody, Tr, Th, Td } from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -109,7 +109,7 @@ const ProviderDetail = () => {
     const checkinProvider = async () => {
         const res = await API.post(`/api/provider/${id}/checkin`);
         const { success, message } = res.data;
-        if (success) { showSuccess('签到成功'); loadProvider(); }
+        if (success) { showSuccess(message || '签到成功'); loadProvider(); }
         else showError(message);
     };
 
@@ -145,6 +145,11 @@ const ProviderDetail = () => {
     const renderStatus = (status) => {
         if (status === 1) return <Badge color="green">启用</Badge>;
         return <Badge color="red">禁用</Badge>;
+    };
+
+    const formatTime = (timestamp) => {
+        if (!timestamp) return '无';
+        return timestamp2string(timestamp);
     };
 
     const parseEnableGroups = (enableGroups) => {
@@ -699,6 +704,14 @@ const ProviderDetail = () => {
                         <div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>签到</div>
                             {provider.checkin_enabled ? <Badge color="blue">已启用</Badge> : <Badge color="gray">未启用</Badge>}
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                                上次成功：{formatTime(provider.last_checkin_at)}
+                            </div>
+                            {provider.last_checkin_status && (
+                                <div style={{ fontSize: '0.75rem', color: provider.last_checkin_status === 'success' ? 'var(--success-color)' : 'var(--danger-color)', marginTop: '0.35rem' }}>
+                                    最近结果：{provider.last_checkin_status}
+                                </div>
+                            )}
                         </div>
                         <div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>令牌 / 模型</div>

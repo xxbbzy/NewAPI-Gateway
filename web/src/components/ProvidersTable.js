@@ -23,6 +23,10 @@ import Pagination from './ui/Pagination';
 const ProvidersTable = () => {
   const navigate = useNavigate();
   const [providers, setProviders] = useState([]);
+  const [latestCheckinRun, setLatestCheckinRun] = useState(null);
+  const [checkinMessages, setCheckinMessages] = useState([]);
+  const [uncheckinProviders, setUncheckinProviders] = useState([]);
+  const [checkinOverviewLoading, setCheckinOverviewLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editProvider, setEditProvider] = useState(null);
@@ -85,17 +89,52 @@ const ProvidersTable = () => {
     return 0;
   }, []);
 
+  const loadCheckinOverview = useCallback(async () => {
+    setCheckinOverviewLoading(true);
+    try {
+      const [summaryRes, messageRes, uncheckinRes] = await Promise.all([
+        API.get('/api/provider/checkin/summary?limit=1'),
+        API.get('/api/provider/checkin/messages?limit=20'),
+        API.get('/api/provider/checkin/uncheckin'),
+      ]);
+      const summaryBody = summaryRes.data || {};
+      const messageBody = messageRes.data || {};
+      const uncheckinBody = uncheckinRes.data || {};
+
+      if (!summaryBody.success) {
+        showError(summaryBody.message || '加载签到汇总失败');
+      } else {
+        setLatestCheckinRun((summaryBody.data || [])[0] || null);
+      }
+      if (!messageBody.success) {
+        showError(messageBody.message || '加载签到消息失败');
+      } else {
+        setCheckinMessages(messageBody.data || []);
+      }
+      if (!uncheckinBody.success) {
+        showError(uncheckinBody.message || '加载未签到渠道失败');
+      } else {
+        setUncheckinProviders(uncheckinBody.data || []);
+      }
+    } catch (error) {
+      showError('加载签到概览失败');
+    } finally {
+      setCheckinOverviewLoading(false);
+    }
+  }, []);
+
   const reloadProviders = useCallback(async () => {
     fetchEpochRef.current += 1;
     inFlightPagesRef.current.clear();
     loadedPagesRef.current.clear();
     setActivePage(1);
-    await loadProviders(0);
-  }, [loadProviders]);
+    await Promise.all([loadProviders(0), loadCheckinOverview()]);
+  }, [loadCheckinOverview, loadProviders]);
 
   useEffect(() => {
     loadProviders(0);
-  }, [loadProviders]);
+    loadCheckinOverview();
+  }, [loadCheckinOverview, loadProviders]);
 
   const deleteProvider = async (id) => {
     if (!window.confirm('确定要删除此供应商吗？')) return;
@@ -123,10 +162,52 @@ const ProvidersTable = () => {
     const res = await API.post(`/api/provider/${id}/checkin`);
     const { success, message } = res.data;
     if (success) {
-      showSuccess('签到成功');
+      showSuccess(message || '签到成功');
       reloadProviders();
     } else {
       showError(message);
+    }
+  };
+
+  const runFullCheckin = async () => {
+    const res = await API.post('/api/provider/checkin/run');
+    const { success, message } = res.data;
+    if (success) {
+      showSuccess(message || '已触发全量签到');
+      reloadProviders();
+    } else {
+      showError(message);
+    }
+  };
+
+  const enableProviderCheckin = async (provider) => {
+    const providerId = provider.id;
+    const previousCheckinEnabled = !!provider.checkin_enabled;
+
+    setProviders((prevProviders) => prevProviders.map((item) => (
+      item.id === providerId ? { ...item, checkin_enabled: true } : item
+    )));
+
+    try {
+      const res = await API.put('/api/provider/', {
+        id: providerId,
+        checkin_enabled: true,
+      });
+      const { success, message } = res.data;
+      if (success) {
+        showSuccess(message || '签到已开启');
+        reloadProviders();
+        return;
+      }
+      setProviders((prevProviders) => prevProviders.map((item) => (
+        item.id === providerId ? { ...item, checkin_enabled: previousCheckinEnabled } : item
+      )));
+      showError(message || '开启签到失败');
+    } catch (error) {
+      setProviders((prevProviders) => prevProviders.map((item) => (
+        item.id === providerId ? { ...item, checkin_enabled: previousCheckinEnabled } : item
+      )));
+      showError('开启签到失败');
     }
   };
 
@@ -176,6 +257,23 @@ const ProvidersTable = () => {
   const renderStatus = (status) => {
     if (status === 1) return <Badge color="green">启用</Badge>;
     return <Badge color="red">禁用</Badge>;
+  };
+
+  const renderCheckinResultStatus = (status) => {
+    if (status === 'success') return <Badge color="green">成功</Badge>;
+    if (status === 'partial') return <Badge color="orange">部分失败</Badge>;
+    if (status === 'failed') return <Badge color="red">失败</Badge>;
+    if (status === 'running') return <Badge color="blue">执行中</Badge>;
+    return <Badge color="gray">{status || '未知'}</Badge>;
+  };
+
+  const isAutoDisabledCheckinItem = (item) => {
+    if (item?.auto_disabled === true) {
+      return true;
+    }
+    // Backward compatibility for historical records before auto_disabled field existed.
+    const message = String(item?.message || '');
+    return message.includes('已自动关闭签到');
   };
 
   const exportProviders = async () => {
@@ -248,6 +346,101 @@ const ProvidersTable = () => {
 
   return (
     <>
+      <Card style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          <div>
+            <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>签到任务概览</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+              展示最近签到任务统计、结果消息与未签到渠道。
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <Button variant="outline" onClick={loadCheckinOverview} icon={RefreshCw} disabled={checkinOverviewLoading}>
+              刷新概览
+            </Button>
+            <Button variant="primary" onClick={runFullCheckin} icon={CheckSquare} disabled={checkinOverviewLoading}>
+              立即全量签到
+            </Button>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.35rem' }}>最近任务状态</div>
+            {latestCheckinRun ? renderCheckinResultStatus(latestCheckinRun.status) : <Badge color="gray">暂无数据</Badge>}
+          </div>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.35rem' }}>成功 / 失败</div>
+            <div style={{ fontWeight: 600 }}>
+              {latestCheckinRun ? `${latestCheckinRun.success_count} / ${latestCheckinRun.failure_count}` : '-'}
+            </div>
+          </div>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.35rem' }}>未签到渠道</div>
+            <div style={{ fontWeight: 600 }}>{uncheckinProviders.length}</div>
+          </div>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.35rem' }}>最近执行时间</div>
+            <div style={{ fontWeight: 600 }}>
+              {latestCheckinRun?.ended_at ? formatTime(latestCheckinRun.ended_at) : '无'}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem' }}>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>签到结果消息（最近 20 条）</div>
+            <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {checkinMessages.length === 0 ? (
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>暂无签到消息</div>
+              ) : (
+                checkinMessages.map((item) => {
+                  const autoDisabledByUpstream = item.status === 'failed' && isAutoDisabledCheckinItem(item);
+                  return (
+                    <div key={item.id} style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.5rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{item.provider_name || `供应商#${item.provider_id}`}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          {item.status === 'success' ? <Badge color="green">成功</Badge> : <Badge color="red">失败</Badge>}
+                          {autoDisabledByUpstream && <Badge color="orange">已自动关闭签到</Badge>}
+                        </div>
+                      </div>
+                      <div style={{ marginTop: '0.25rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>{item.message || '-'}</div>
+                      {autoDisabledByUpstream && (
+                        <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', color: 'var(--warning-color, #d97706)' }}>
+                          签到功能上游未启用，已自动关闭该供应商签到
+                        </div>
+                      )}
+                      <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
+                        奖励额度：{item.quota_awarded || 0} · {formatTime(item.checked_at)}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>未签到渠道（今日）</div>
+            <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {uncheckinProviders.length === 0 ? (
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>今日所有已启用签到渠道均已签到</div>
+              ) : (
+                uncheckinProviders.map((provider) => (
+                  <div key={provider.id} style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.5rem' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{provider.name}</div>
+                    <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      上次成功签到：{formatTime(provider.last_checkin_at)}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <Card padding="0">
         <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ fontWeight: '600' }}>供应商列表</div>
@@ -299,6 +492,9 @@ const ProvidersTable = () => {
                       <Button size="sm" variant="primary" onClick={() => navigate(`/provider/${p.id}`)} title="详情" icon={Eye} />
                       <Button size="sm" variant="secondary" onClick={() => openEdit(p)} title="编辑" icon={Edit} />
                       <Button size="sm" variant="outline" onClick={() => syncProvider(p.id)} title="同步" icon={RefreshCw} />
+                      {!p.checkin_enabled && (
+                        <Button size="sm" variant="ghost" color="blue" onClick={() => enableProviderCheckin(p)} title="一键开启签到" icon={CheckSquare} />
+                      )}
                       {p.checkin_enabled && (
                         <Button size="sm" variant="ghost" color="green" onClick={() => checkinProvider(p.id)} title="签到" icon={CheckSquare} />
                       )}

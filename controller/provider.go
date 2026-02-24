@@ -5,9 +5,12 @@ import (
 	"NewAPI-Gateway/model"
 	"NewAPI-Gateway/service"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -40,8 +43,75 @@ func GetProviderDetail(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "供应商不存在"})
 		return
 	}
+	if item, itemErr := model.GetLatestCheckinRunItemByProviderId(id); itemErr == nil && item != nil {
+		provider.LastCheckinStatus = item.Status
+		provider.LastCheckinMessage = item.Message
+		provider.LastCheckinQuotaAwarded = item.QuotaAwarded
+		provider.LastCheckinResultAt = item.CheckedAt
+	}
 	provider.CleanForResponse()
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": provider})
+}
+
+func GetCheckinRunSummaries(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if limit <= 0 {
+		limit = 20
+	}
+	runs, err := model.GetRecentCheckinRuns(limit)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": runs})
+}
+
+func GetCheckinRunMessages(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if limit <= 0 {
+		limit = 50
+	}
+	items, err := model.GetRecentCheckinRunItems(limit)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": items})
+}
+
+func GetUncheckinProviders(c *gin.Context) {
+	providers, dayStart, timezone, err := service.GetUncheckinProviders(time.Now())
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	for _, provider := range providers {
+		provider.CleanForResponse()
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"message":   "",
+		"data":      providers,
+		"day_start": dayStart,
+		"timezone":  timezone,
+	})
+}
+
+func TriggerFullCheckinRunHandler(c *gin.Context) {
+	run, err := service.TriggerFullCheckinRun("manual")
+	if err != nil {
+		if errors.Is(err, service.ErrCheckinRunInProgress) {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "签到任务正在执行中，请稍后再试"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "触发签到任务失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": run.Message,
+		"data":    run,
+	})
 }
 
 func GetProviderModelAliasMapping(c *gin.Context) {
@@ -264,11 +334,30 @@ func CheckinProviderHandler(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "供应商不存在"})
 		return
 	}
-	if err := service.CheckinProvider(provider); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "签到失败: " + err.Error()})
+	run, item, err := service.RunProviderCheckin(provider)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "签到失败: " + err.Error(),
+			"data": gin.H{
+				"run":  run,
+				"item": item,
+			},
+		})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "签到成功"})
+	message := strings.TrimSpace(item.Message)
+	if message == "" {
+		message = "签到成功"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": message,
+		"data": gin.H{
+			"run":  run,
+			"item": item,
+		},
+	})
 }
 
 func GetProviderTokens(c *gin.Context) {

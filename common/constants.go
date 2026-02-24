@@ -46,6 +46,9 @@ var WeChatAccountQRCodeImageURL = ""
 
 var TurnstileSiteKey = ""
 var TurnstileSecretKey = ""
+var CheckinScheduleEnabled = true
+var CheckinScheduleTime = "09:00"
+var CheckinScheduleTimezone = "Asia/Shanghai"
 
 const (
 	RoleGuestUser  = 0
