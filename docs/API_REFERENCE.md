@@ -173,6 +173,15 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 | PUT | `/api/provider/token/:token_id` | 更新本地 token 字段 |
 | DELETE | `/api/provider/token/:token_id` | 删除 token（先删上游再删本地） |
 
+补充说明：
+
+- `GET /api/provider/:id/pricing` 额外返回：
+  - `token_group_options`：可用于创建上游 token 的分组选项（含 `group_name`、`ratio`）。
+  - `default_group`：推荐默认分组（优先上游默认分组，否则倍率最低分组）。
+- `POST /api/provider/:id/tokens` 新增服务端校验：
+  - `group_name` 不能为空。
+  - `group_name` 必须属于当前渠道可用分组，否则返回校验错误。
+
 ## 聚合 Token API（Session，`UserAuth + NoTokenAuth`）
 
 | Method | Path | 说明 |

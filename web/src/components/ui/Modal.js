@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { X } from 'lucide-react';
 
-const Modal = ({ isOpen, onClose, title, children, actions }) => {
+const Modal = ({ isOpen, onClose, title, children, actions, closeOnOverlayClick = true }) => {
     useEffect(() => {
         if (isOpen) {
             document.body.style.overflow = 'hidden';
@@ -30,7 +30,7 @@ const Modal = ({ isOpen, onClose, title, children, actions }) => {
                 justifyContent: 'center',
                 padding: '1rem',
             }}
-            onClick={onClose}
+            onClick={closeOnOverlayClick ? onClose : undefined}
         >
             <div
                 style={{

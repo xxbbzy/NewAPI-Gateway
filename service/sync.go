@@ -64,6 +64,8 @@ func syncPricing(client *UpstreamClient, provider *model.Provider) error {
 
 	groupRatioJSON, _ := json.Marshal(pricingPayload.GroupRatio)
 	provider.UpdatePricingGroupRatio(string(groupRatioJSON))
+	usableGroupJSON, _ := json.Marshal(pricingPayload.UsableGroup)
+	provider.UpdatePricingUsableGroup(string(usableGroupJSON))
 	supportedEndpointJSON, _ := json.Marshal(pricingPayload.SupportedEndpoint)
 	provider.UpdatePricingSupportedEndpoint(string(supportedEndpointJSON))
 

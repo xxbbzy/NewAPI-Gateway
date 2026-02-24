@@ -37,6 +37,7 @@
 
 - `priority`、`weight`：作为上游 token 默认路由权重来源。
 - `pricing_group_ratio`：上游分组倍率缓存（JSON）。
+- `pricing_usable_group`：上游可用/默认分组信息缓存（JSON）。
 - `pricing_supported_endpoint`：上游支持端点缓存（JSON）。
 
 ### provider_tokens

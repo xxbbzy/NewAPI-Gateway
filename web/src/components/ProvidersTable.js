@@ -20,6 +20,10 @@ import Modal from './ui/Modal';
 import Input from './ui/Input';
 import Pagination from './ui/Pagination';
 
+const ACCESS_TOKEN_GUIDE_URL = 'https://github.com/xxbbzy/NewAPI-Gateway/blob/main/docs/provider-form-guide.md#access-token';
+const UPSTREAM_USER_ID_GUIDE_URL = 'https://github.com/xxbbzy/NewAPI-Gateway/blob/main/docs/provider-form-guide.md#upstream-user-id';
+const QUOTA_PER_USD = 500000;
+
 const ProvidersTable = () => {
   const navigate = useNavigate();
   const [providers, setProviders] = useState([]);
@@ -212,7 +216,10 @@ const ProvidersTable = () => {
   };
 
   const openEdit = (provider) => {
-    setEditProvider({ ...provider });
+    setEditProvider({
+      ...provider,
+      user_id: provider?.user_id ? String(provider.user_id) : '',
+    });
     setShowModal(true);
   };
 
@@ -221,7 +228,7 @@ const ProvidersTable = () => {
       name: '',
       base_url: '',
       access_token: '',
-      user_id: 0,
+      user_id: '',
       priority: 0,
       weight: 10,
       checkin_enabled: false,
@@ -230,9 +237,15 @@ const ProvidersTable = () => {
     setShowModal(true);
   };
 
+  const normalizeProviderPayload = () => ({
+    ...editProvider,
+    user_id: parseInt(editProvider?.user_id, 10) || 0,
+  });
+
   const saveProvider = async () => {
+    const providerPayload = normalizeProviderPayload();
     if (editProvider.id) {
-      const res = await API.put('/api/provider/', editProvider);
+      const res = await API.put('/api/provider/', providerPayload);
       const { success, message } = res.data;
       if (success) {
         showSuccess('更新成功');
@@ -242,7 +255,7 @@ const ProvidersTable = () => {
         showError(message);
       }
     } else {
-      const res = await API.post('/api/provider/', editProvider);
+      const res = await API.post('/api/provider/', providerPayload);
       const { success, message } = res.data;
       if (success) {
         showSuccess('创建成功');
@@ -325,6 +338,14 @@ const ProvidersTable = () => {
   const formatTime = (timestamp) => {
     if (!timestamp) return '无';
     return timestamp2string(timestamp);
+  };
+
+  const formatCheckinReward = (quotaAwarded) => {
+    const quota = Number(quotaAwarded || 0);
+    if (!Number.isFinite(quota)) {
+      return '$0.00';
+    }
+    return `$${(quota / QUOTA_PER_USD).toFixed(2)}`;
   };
 
   const onPaginationChange = async (e, { activePage: nextActivePage }) => {
@@ -412,7 +433,7 @@ const ProvidersTable = () => {
                         </div>
                       )}
                       <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>
-                        奖励额度：{item.quota_awarded || 0} · {formatTime(item.checked_at)}
+                        奖励额度：{formatCheckinReward(item.quota_awarded)} · {formatTime(item.checked_at)}
                       </div>
                     </div>
                   );
@@ -532,11 +553,9 @@ const ProvidersTable = () => {
         title={editProvider?.id ? '编辑供应商' : '添加供应商'}
         isOpen={showModal}
         onClose={() => setShowModal(false)}
+        closeOnOverlayClick={false}
         actions={
-          <>
-            <Button variant="secondary" onClick={() => setShowModal(false)}>取消</Button>
-            <Button variant="primary" onClick={saveProvider}>保存</Button>
-          </>
+          <Button variant="primary" onClick={saveProvider}>保存</Button>
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -557,12 +576,27 @@ const ProvidersTable = () => {
             value={editProvider?.access_token || ''}
             onChange={(e) => setEditProvider({ ...editProvider, access_token: e.target.value })}
           />
+          <div style={{ marginTop: '-0.5rem', marginBottom: '0.5rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+            <a href={ACCESS_TOKEN_GUIDE_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--primary-600)' }}>
+              如何获取访问令牌
+            </a>
+          </div>
           <Input
             label="上游用户编号"
             type="number"
-            value={editProvider?.user_id || 0}
-            onChange={(e) => setEditProvider({ ...editProvider, user_id: parseInt(e.target.value) || 0 })}
+            value={editProvider?.user_id ?? ''}
+            onFocus={() => {
+              if (editProvider?.user_id === 0 || editProvider?.user_id === '0') {
+                setEditProvider({ ...editProvider, user_id: '' });
+              }
+            }}
+            onChange={(e) => setEditProvider({ ...editProvider, user_id: e.target.value })}
           />
+          <div style={{ marginTop: '-0.5rem', marginBottom: '0.5rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+            <a href={UPSTREAM_USER_ID_GUIDE_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--primary-600)' }}>
+              如何获取上游用户编号
+            </a>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
             <Input
               label="权重"

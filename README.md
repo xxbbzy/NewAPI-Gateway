@@ -120,6 +120,11 @@ go build -ldflags "-s -w -X 'NewAPI-Gateway/common.Version=$(cat VERSION)'" -o g
 | 优先级       | 路由层级（越高越优先）              | `0`                          |
 | 启用签到     | 是否自动签到                        | ☑️                            |
 
+字段获取与填写示例文档：
+
+- [添加供应商字段获取指南](./docs/provider-form-guide.md)
+- [添加供应商填写示例](./docs/provider-form-example.md)
+
 ### 2. 同步数据
 
 点击供应商列表中的 **同步** 按钮，系统会：

@@ -69,7 +69,7 @@ describe('ProvidersTable', () => {
                 provider_name: 'Provider-A',
                 status: 'success',
                 message: 'ok',
-                quota_awarded: 100,
+                quota_awarded: 500000,
                 checked_at: 1730000000,
               },
             ],
@@ -105,7 +105,66 @@ describe('ProvidersTable', () => {
 
     expect(container.textContent).toContain('签到任务概览');
     expect(container.textContent).toContain('Provider-A');
+    expect(container.textContent).toContain('奖励额度：$1.00');
     expect(container.textContent).toContain('今日所有已启用签到渠道均已签到');
+  });
+
+  it('keeps add-provider modal open when overlay is clicked', async () => {
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const addButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('添加供应商'));
+    expect(addButton).not.toBeNull();
+
+    await act(async () => {
+      addButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    const overlay = container.querySelector('div[style*="position: fixed"]');
+    expect(overlay).not.toBeNull();
+
+    await act(async () => {
+      overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(container.textContent).toContain('添加供应商');
+  });
+
+  it('normalizes empty upstream user id to 0 on create provider submit', async () => {
+    API.post.mockResolvedValue({ data: { success: true, message: '' } });
+
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const addButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('添加供应商'));
+    expect(addButton).not.toBeNull();
+
+    await act(async () => {
+      addButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    const numberInputs = container.querySelectorAll('input[type="number"]');
+    expect(numberInputs.length).toBeGreaterThan(0);
+    expect(numberInputs[0].value).toBe('');
+
+    const saveButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '保存');
+    expect(saveButton).not.toBeNull();
+
+    await act(async () => {
+      saveButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(API.post).toHaveBeenCalledWith('/api/provider/', expect.objectContaining({ user_id: 0 }));
   });
 
   it('renders already-signed message as success', async () => {
@@ -167,6 +226,7 @@ describe('ProvidersTable', () => {
 
     expect(container.textContent).toContain('今日已签到');
     expect(container.textContent).toContain('Provider-A成功今日已签到');
+    expect(container.textContent).toContain('奖励额度：$0.00');
     expect(container.textContent).not.toContain('Provider-A失败今日已签到');
   });
 

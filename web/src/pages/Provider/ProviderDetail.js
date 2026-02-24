@@ -30,6 +30,8 @@ const ProviderDetail = () => {
     const [syncing, setSyncing] = useState(false);
     const [showTokenModal, setShowTokenModal] = useState(false);
     const [editToken, setEditToken] = useState(null);
+    const [tokenGroupOptions, setTokenGroupOptions] = useState([]);
+    const [defaultTokenGroup, setDefaultTokenGroup] = useState('');
     const [selectedPricing, setSelectedPricing] = useState(null);
     const [aliasMapping, setAliasMapping] = useState({});
     const [aliasMappingInput, setAliasMappingInput] = useState('{}');
@@ -57,11 +59,13 @@ const ProviderDetail = () => {
     const loadPricing = useCallback(async () => {
         try {
             const res = await API.get(`/api/provider/${id}/pricing`);
-            const { success, data, message, group_ratio, supported_endpoint } = res.data;
+            const { success, data, message, group_ratio, supported_endpoint, token_group_options, default_group } = res.data;
             if (success) {
                 setPricing(data || []);
                 setPricingGroupRatio(group_ratio || {});
                 setEndpointMap(supported_endpoint || {});
+                setTokenGroupOptions(Array.isArray(token_group_options) ? token_group_options : []);
+                setDefaultTokenGroup(typeof default_group === 'string' ? default_group.trim() : '');
             }
             else showError(message);
         } catch (e) { showError('加载定价失败'); }
@@ -113,21 +117,60 @@ const ProviderDetail = () => {
         else showError(message);
     };
 
+    const getPreferredCreateGroup = useCallback((currentGroup = '') => {
+        const normalizedCurrentGroup = String(currentGroup || '').trim();
+        const availableGroups = new Set((tokenGroupOptions || []).map((item) => String(item.group_name || '').trim()).filter(Boolean));
+        if (normalizedCurrentGroup && availableGroups.has(normalizedCurrentGroup)) {
+            return normalizedCurrentGroup;
+        }
+        const normalizedDefaultGroup = String(defaultTokenGroup || '').trim();
+        if (normalizedDefaultGroup && availableGroups.has(normalizedDefaultGroup)) {
+            return normalizedDefaultGroup;
+        }
+        if (tokenGroupOptions.length > 0) {
+            return String(tokenGroupOptions[0].group_name || '').trim();
+        }
+        return '';
+    }, [defaultTokenGroup, tokenGroupOptions]);
+
     const openAddToken = () => {
-        setEditToken({ name: '', group_name: '', status: 1, priority: 0, weight: 10, model_limits: '', unlimited_quota: true, remain_quota: 0 });
+        setEditToken({ name: '', group_name: getPreferredCreateGroup(''), status: 1, priority: 0, weight: 10, model_limits: '', unlimited_quota: true, remain_quota: 0 });
         setShowTokenModal(true);
     };
 
-    const openEditToken = (token) => { setEditToken({ ...token }); setShowTokenModal(true); };
+    const openEditToken = (token) => {
+        setEditToken({
+            ...token,
+            group_name: String(token?.group_name || '').trim()
+        });
+        setShowTokenModal(true);
+    };
 
     const saveToken = async () => {
+        const selectedGroupName = String(editToken?.group_name || '').trim();
+        const availableGroups = new Set((tokenGroupOptions || []).map((item) => String(item.group_name || '').trim()).filter(Boolean));
+
+        if (!editToken?.id && availableGroups.size === 0) {
+            showError('未获取到可用分组，请先同步供应商数据');
+            return;
+        }
+        if (selectedGroupName === '') {
+            showError('分组不能为空');
+            return;
+        }
+        if (!editToken?.id && !availableGroups.has(selectedGroupName)) {
+            showError('分组不属于该渠道可用分组，请先同步后重试');
+            return;
+        }
+        const payload = { ...editToken, group_name: selectedGroupName };
+
         if (editToken.id) {
-            const res = await API.put(`/api/provider/token/${editToken.id}`, editToken);
+            const res = await API.put(`/api/provider/token/${editToken.id}`, payload);
             const { success, message } = res.data;
             if (success) { showSuccess('更新成功'); setShowTokenModal(false); loadTokens(); }
             else showError(message);
         } else {
-            const res = await API.post(`/api/provider/${id}/tokens`, editToken);
+            const res = await API.post(`/api/provider/${id}/tokens`, payload);
             const { success, message } = res.data;
             if (success) { showSuccess('令牌创建成功'); setShowTokenModal(false); loadTokens(); }
             else showError(message);
@@ -298,6 +341,33 @@ const ProviderDetail = () => {
         }
         return [...groups];
     }, [tokens]);
+
+    const tokenGroupSelectOptions = useMemo(() => {
+        const options = (tokenGroupOptions || []).map((item) => ({
+            group_name: String(item.group_name || '').trim(),
+            ratio: Number(item.ratio),
+            legacy: false
+        })).filter((item) => item.group_name);
+        const currentGroup = String(editToken?.group_name || '').trim();
+        if (currentGroup && !options.some((item) => item.group_name === currentGroup)) {
+            options.push({
+                group_name: currentGroup,
+                ratio: Number.NaN,
+                legacy: true
+            });
+        }
+        return options;
+    }, [editToken?.group_name, tokenGroupOptions]);
+
+    useEffect(() => {
+        if (!showTokenModal) return;
+        setEditToken((previous) => {
+            if (!previous || previous.id) return previous;
+            const preferredGroup = getPreferredCreateGroup(previous.group_name);
+            if (preferredGroup === String(previous.group_name || '')) return previous;
+            return { ...previous, group_name: preferredGroup };
+        });
+    }, [getPreferredCreateGroup, showTokenModal]);
 
     const aliasEntries = useMemo(() => {
         return Object.entries(aliasMapping || {})
@@ -867,16 +937,50 @@ const ProviderDetail = () => {
                 title={editToken?.id ? '编辑令牌' : '在上游创建令牌'}
                 isOpen={showTokenModal}
                 onClose={() => setShowTokenModal(false)}
+                closeOnOverlayClick={false}
                 actions={
-                    <>
-                        <Button variant="secondary" onClick={() => setShowTokenModal(false)}>取消</Button>
-                        <Button variant="primary" onClick={saveToken}>保存</Button>
-                    </>
+                    <Button variant="primary" onClick={saveToken} disabled={!editToken?.id && tokenGroupOptions.length === 0}>保存</Button>
                 }
             >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                     <Input label="名称" placeholder="令牌名称" value={editToken?.name || ''} onChange={(e) => setEditToken({ ...editToken, name: e.target.value })} />
-                    <Input label="分组名称" placeholder="默认（default）" value={editToken?.group_name || ''} onChange={(e) => setEditToken({ ...editToken, group_name: e.target.value })} />
+                    <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '1rem' }}>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '500', color: 'var(--text-secondary)' }}>分组名称</label>
+                        <select
+                            name="group_name"
+                            value={editToken?.group_name || ''}
+                            onChange={(e) => setEditToken({ ...editToken, group_name: e.target.value })}
+                            style={{
+                                width: '100%',
+                                padding: '0.625rem 0.75rem',
+                                fontSize: '0.875rem',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid var(--border-color)',
+                                backgroundColor: 'var(--bg-primary)',
+                                color: 'var(--text-primary)',
+                                outline: 'none',
+                            }}
+                        >
+                            <option value="">请选择分组</option>
+                            {tokenGroupSelectOptions.map((option) => {
+                                const ratioText = Number.isFinite(option.ratio) && option.ratio > 0 ? `x${formatRatio(option.ratio)}` : '未知倍率';
+                                const legacySuffix = option.legacy ? '，历史分组' : '';
+                                return (
+                                    <option key={option.group_name} value={option.group_name}>
+                                        {`${option.group_name} (${ratioText}${legacySuffix})`}
+                                    </option>
+                                );
+                            })}
+                        </select>
+                        <span style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                            仅允许选择该渠道可用分组；默认优先上游默认分组，否则自动选择最低倍率分组。
+                        </span>
+                        {!editToken?.id && tokenGroupOptions.length === 0 && (
+                            <span style={{ marginTop: '0.35rem', fontSize: '0.75rem', color: 'var(--danger-color)' }}>
+                                未获取到可用分组，请先同步供应商数据
+                            </span>
+                        )}
+                    </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                         <Input label="权重" type="number" value={editToken?.weight || 10} onChange={(e) => setEditToken({ ...editToken, weight: parseInt(e.target.value) || 0 })} />
                         <Input label="优先级" type="number" value={editToken?.priority || 0} onChange={(e) => setEditToken({ ...editToken, priority: parseInt(e.target.value) || 0 })} />

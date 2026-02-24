@@ -16,6 +16,7 @@
 | --- | --- |
 | 首次部署/试用 | [QUICK_START.md](./QUICK_START.md) -> [CONFIGURATION.md](./CONFIGURATION.md) -> [DEPLOYMENT.md](./DEPLOYMENT.md) |
 | 接入调用 API | [ARCHITECTURE.md](./ARCHITECTURE.md) -> [API_REFERENCE.md](./API_REFERENCE.md) -> [FAQ.md](./FAQ.md) |
+| 供应商接入填写 | [provider-form-guide.md](./provider-form-guide.md) -> [provider-form-example.md](./provider-form-example.md) -> [OPERATIONS.md](./OPERATIONS.md) |
 | 日常运维值守 | [OPERATIONS.md](./OPERATIONS.md) -> [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) -> [FAQ.md](./FAQ.md) |
 | 二次开发 | [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) -> [DEVELOPMENT.md](./DEVELOPMENT.md) -> [API_REFERENCE.md](./API_REFERENCE.md) |
 
@@ -36,6 +37,8 @@
 | 研发 | [DEVELOPMENT.md](./DEVELOPMENT.md) | 本地开发、调试、贡献流程 |
 | 研发 | [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) | 核心表结构与数据流 |
 | 专题 | [model-alias-manual-mapping.md](./model-alias-manual-mapping.md) | 供应商模型别名手动映射 |
+| 专题 | [provider-form-guide.md](./provider-form-guide.md) | 添加供应商字段获取说明（Access Token / Upstream User ID） |
+| 专题 | [provider-form-example.md](./provider-form-example.md) | 添加供应商与创建上游令牌填写示例 |
 | 专题 | [FAQ.md](./FAQ.md) | 高频问题与排障捷径 |
 | 合规 | [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) | 第三方许可声明 |
 
@@ -49,6 +52,7 @@
 | 数据表/字段语义变更 | [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md), [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | 新增模块或目录调整 | [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md), [DEVELOPMENT.md](./DEVELOPMENT.md) |
 | 供应商模型映射策略变更 | [model-alias-manual-mapping.md](./model-alias-manual-mapping.md), [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| 供应商接入表单字段与交互变更 | [provider-form-guide.md](./provider-form-guide.md), [provider-form-example.md](./provider-form-example.md), [README.md](../README.md) |
 
 ## 文档维护约定
 
