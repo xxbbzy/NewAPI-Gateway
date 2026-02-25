@@ -14,6 +14,7 @@ const FilesTable = () => {
   const [loading, setLoading] = useState(true);
   const [activePage, setActivePage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
+  const [total, setTotal] = useState(0);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchMode, setSearchMode] = useState(false);
@@ -30,6 +31,7 @@ const FilesTable = () => {
         const normalized = normalizePaginatedData(data, { p: page, page_size: ITEMS_PER_PAGE });
         setFiles(Array.isArray(normalized.items) ? normalized.items : []);
         setTotalPages(Number(normalized.total_pages || 0));
+        setTotal(Number(normalized.total || 0));
         setSearchMode(false);
       } else {
         showError(message);
@@ -97,6 +99,7 @@ const FilesTable = () => {
       setFiles(Array.isArray(data) ? data : []);
       setActivePage(1);
       setTotalPages(1);
+      setTotal(Array.isArray(data) ? data.length : 0);
       setSearchMode(true);
     } else {
       showError(message);
@@ -252,7 +255,8 @@ const FilesTable = () => {
               })}
           </Tbody>
         </Table>
-        <div style={{ padding: '1rem', borderTop: '1px solid var(--border-color)' }}>
+        <div className='table-footer'>
+          <div className='table-footer-meta'>共 {searchMode ? visibleFiles.length : total} 条记录</div>
           <Pagination
             activePage={activePage}
             totalPages={Math.max(searchMode ? 1 : totalPages, 1)}

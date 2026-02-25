@@ -384,7 +384,7 @@ const ProvidersTable = () => {
                       </div>
                       <div style={{ marginTop: '0.25rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>{item.message || '-'}</div>
                       {autoDisabledByUpstream && (
-                        <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', color: 'var(--warning-color, #d97706)' }}>
+                        <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', color: 'var(--warning-color)' }}>
                           签到功能上游未启用，已自动关闭该供应商签到
                         </div>
                       )}
@@ -492,8 +492,8 @@ const ProvidersTable = () => {
         )}
 
         {!loading && (
-          <div style={{ padding: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+          <div className='table-footer'>
+            <div className='table-footer-meta'>
               共 {total} 条记录
             </div>
             <Pagination

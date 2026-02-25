@@ -228,8 +228,8 @@ const AggTokensTable = () => {
                                 )}
                             </Tbody>
                         </Table>
-                        <div style={{ padding: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                        <div className='table-footer'>
+                            <div className='table-footer-meta'>
                                 共 {total} 条记录
                             </div>
                             <Pagination

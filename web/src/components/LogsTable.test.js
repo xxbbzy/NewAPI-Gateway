@@ -61,7 +61,7 @@ describe('LogsTable pagination', () => {
     jest.clearAllMocks();
   });
 
-  it('disables next button when has_more is false', async () => {
+  it('hides pagination controls when only one page exists', async () => {
     API.get.mockResolvedValueOnce({
       data: {
         success: true,
@@ -95,12 +95,11 @@ describe('LogsTable pagination', () => {
     await flushPromises();
     await flushPromises();
 
-    const prevButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('上一页'));
-    const nextButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('下一页'));
-    expect(prevButton).not.toBeNull();
-    expect(nextButton).not.toBeNull();
-    expect(prevButton.disabled).toBe(true);
-    expect(nextButton.disabled).toBe(true);
+    const prevButton = container.querySelector('button[aria-label="上一页"]');
+    const nextButton = container.querySelector('button[aria-label="下一页"]');
+    expect(prevButton).toBeNull();
+    expect(nextButton).toBeNull();
+    expect(container.textContent).toContain('共 1 条记录');
   });
 
   it('resets to first page after filter changes', async () => {
@@ -143,7 +142,7 @@ describe('LogsTable pagination', () => {
     await flushPromises();
     await flushPromises();
 
-    const nextButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('下一页'));
+    const nextButton = container.querySelector('button[aria-label="下一页"]');
     expect(nextButton).not.toBeNull();
 
     await act(async () => {

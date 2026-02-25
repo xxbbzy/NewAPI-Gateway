@@ -6,6 +6,7 @@ import Card from './ui/Card';
 import Badge from './ui/Badge';
 import Button from './ui/Button';
 import Input from './ui/Input';
+import Pagination from './ui/Pagination';
 
 const formatTime = (ts) => {
   if (!ts) {
@@ -68,7 +69,7 @@ const buildSummaryFromLogs = (logs, isErrorLog) => {
 const LogsTable = ({ selfOnly }) => {
   const [logs, setLogs] = useState([]);
   const [total, setTotal] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
+  const [totalPages, setTotalPages] = useState(0);
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [expandedRowId, setExpandedRowId] = useState(null);
@@ -111,7 +112,7 @@ const LogsTable = ({ selfOnly }) => {
         const pageItems = Array.isArray(normalized.items) ? normalized.items : [];
         setLogs(pageItems);
         setTotal(Number(normalized.total || 0));
-        setHasMore(Boolean(normalized.has_more));
+        setTotalPages(Number(normalized.total_pages || 0));
 
         const providers = Array.isArray(normalized.providers)
           ? normalized.providers
@@ -225,7 +226,13 @@ const LogsTable = ({ selfOnly }) => {
     }
   };
 
-  const canGoNext = hasMore;
+  const onPaginationChange = (e, { activePage: nextActivePage }) => {
+    if (!Number.isFinite(Number(nextActivePage))) return;
+    const normalizedPage = Math.max(1, Number(nextActivePage));
+    const safeTotalPages = Math.max(Number(totalPages || 0), 1);
+    if (normalizedPage > safeTotalPages) return;
+    setPage(normalizedPage - 1);
+  };
 
   return (
     <Card padding='0'>
@@ -401,24 +408,13 @@ const LogsTable = ({ selfOnly }) => {
         </div>
       )}
 
-      <div className='logs-pagination'>
-        <Button
-          size='sm'
-          variant='secondary'
-          onClick={() => setPage((prev) => Math.max(prev - 1, 0))}
-          disabled={loading || page === 0}
-        >
-          上一页
-        </Button>
-        <span className='logs-page-text'>第 {page + 1} 页</span>
-        <Button
-          size='sm'
-          variant='secondary'
-          onClick={() => setPage((prev) => prev + 1)}
-          disabled={loading || !canGoNext}
-        >
-          下一页
-        </Button>
+      <div className='table-footer logs-pagination'>
+        <span className='table-footer-meta'>共 {total} 条记录</span>
+        <Pagination
+          activePage={page + 1}
+          totalPages={Math.max(totalPages, 1)}
+          onPageChange={onPaginationChange}
+        />
       </div>
     </Card>
   );

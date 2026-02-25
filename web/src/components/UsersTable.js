@@ -36,6 +36,7 @@ const UsersTable = () => {
   const [loading, setLoading] = useState(true);
   const [activePage, setActivePage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
+  const [total, setTotal] = useState(0);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchMode, setSearchMode] = useState(false);
@@ -49,6 +50,7 @@ const UsersTable = () => {
         const normalized = normalizePaginatedData(data, { p: page, page_size: ITEMS_PER_PAGE });
         setUsers(Array.isArray(normalized.items) ? normalized.items : []);
         setTotalPages(Number(normalized.total_pages || 0));
+        setTotal(Number(normalized.total || 0));
         setSearchMode(false);
       } else {
         showError(message);
@@ -124,6 +126,7 @@ const UsersTable = () => {
       setUsers(Array.isArray(data) ? data : []);
       setActivePage(1);
       setTotalPages(1);
+      setTotal(Array.isArray(data) ? data.length : 0);
       setSearchMode(true);
     } else {
       showError(message);
@@ -249,7 +252,8 @@ const UsersTable = () => {
                 })}
             </Tbody>
           </Table>
-          <div style={{ padding: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end' }}>
+          <div className='table-footer'>
+            <div className='table-footer-meta'>共 {searchMode ? visibleUsers.length : total} 条记录</div>
             <Pagination
               activePage={activePage}
               onPageChange={onPaginationChange}
