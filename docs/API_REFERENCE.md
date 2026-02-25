@@ -27,6 +27,15 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 - 多数管理接口启用了 `NoTokenAuth`，不支持用户 Token。
 - 仅少数未加 `NoTokenAuth` 的接口可用 `Authorization: Bearer <user-token>`（例如 `GET /api/dashboard`）。
 
+### 3. 插件供应商管理 API 认证（Token Only）
+
+- 插件供应商管理接口位于 `/api/plugin/provider/*`。
+- 该分组要求 `AdminAuth + TokenOnlyAuth`：
+  - 必须使用 `Authorization: Bearer <user-token>`；
+  - token 对应用户必须为管理员（`role >= 10`）；
+  - 仅 Session（无 token）会被拒绝。
+- 个人访问令牌可由 `GET /api/user/token` 生成（需先通过 Session 登录）。
+
 ## 响应格式
 
 ### Relay 接口
@@ -54,6 +63,26 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 }
 ```
 
+### 管理列表分页约定（统一协议）
+
+适用于返回“列表”的管理接口（例如 `/api/provider/`、`/api/user/`、`/api/agg-token/`、`/api/file/`、`/api/log/*`）：
+
+- 请求参数：
+  - `p`：页码（从 `0` 起）
+  - `page_size`：每页条数（默认 `10`，超出服务端上限会被自动截断）
+- 响应 `data` 结构：
+
+```json
+{
+  "items": [],
+  "p": 0,
+  "page_size": 10,
+  "total": 0,
+  "total_pages": 0,
+  "has_more": false
+}
+```
+
 ## Relay API（`/v1*`）
 
 | Method | Path | 说明 |
@@ -70,8 +99,8 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 | POST | `/v1/responses` | OpenAI Responses |
 | POST | `/v1/messages` | Anthropic 兼容 |
 | POST | `/v1beta/models/*path` | Gemini 兼容 |
-| GET | `/v1/models` | 获取可用模型 |
-| GET | `/v1/models/:model` | 获取模型详情 |
+| GET | `/v1/models` | 获取可用 canonical 模型（按聚合 token 权限过滤） |
+| GET | `/v1/models/:model` | 按 canonical/alias 获取模型详情 |
 | GET | `/dashboard/billing/subscription` | 兼容返回（模拟） |
 | GET | `/dashboard/billing/usage` | 兼容返回（模拟） |
 
@@ -108,7 +137,7 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| GET | `/api/user/` | 用户列表 |
+| GET | `/api/user/` | 用户列表（支持 `?p=&page_size=`） |
 | GET | `/api/user/search` | 用户搜索 |
 | GET | `/api/user/:id` | 用户详情 |
 | POST | `/api/user/` | 创建用户 |
@@ -152,7 +181,7 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| GET | `/api/provider/` | 供应商列表 |
+| GET | `/api/provider/` | 供应商列表（支持 `?p=&page_size=`） |
 | GET | `/api/provider/export` | 导出供应商 |
 | POST | `/api/provider/import` | 导入供应商 |
 | GET | `/api/provider/checkin/summary` | 获取签到任务汇总（支持 `?limit=`） |
@@ -183,11 +212,39 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
   - `group_name` 不能为空。
   - `group_name` 必须属于当前渠道可用分组，否则返回校验错误。
 
+## Plugin Provider 相关 API（Token，`AdminAuth + TokenOnlyAuth`）
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| GET | `/api/plugin/provider/` | 供应商列表（支持 `?p=&page_size=`） |
+| GET | `/api/plugin/provider/export` | 导出供应商 |
+| POST | `/api/plugin/provider/import` | 导入供应商 |
+| GET | `/api/plugin/provider/:id` | 供应商详情 |
+| POST | `/api/plugin/provider/` | 创建供应商 |
+| PUT | `/api/plugin/provider/` | 更新供应商 |
+| POST | `/api/plugin/provider/:id/sync` | 触发单供应商同步 |
+| GET | `/api/plugin/provider/:id/tokens` | 获取供应商 token 列表 |
+| GET | `/api/plugin/provider/:id/pricing` | 获取供应商 pricing 缓存 |
+| GET | `/api/plugin/provider/:id/model-alias-mapping` | 获取模型别名手动映射 |
+| PUT | `/api/plugin/provider/:id/model-alias-mapping` | 更新模型别名手动映射 |
+| POST | `/api/plugin/provider/:id/tokens` | 在上游创建 token 并回同步 |
+| PUT | `/api/plugin/provider/token/:token_id` | 更新本地 token 字段 |
+| DELETE | `/api/plugin/provider/token/:token_id` | 删除 token（先删上游再删本地） |
+
+补充说明：
+
+- 该分组仅接受管理员 token，不接受 Session-only 鉴权。
+- `GET /api/plugin/provider/` 使用统一分页响应（`items/p/page_size/total/total_pages/has_more`）。
+- 敏感字段脱敏规则与管理台一致：
+  - 供应商响应中的 `access_token` 不返回明文；
+  - 供应商 token 响应中的 `sk_key` 为脱敏显示。
+- 旧的 `/api/provider/*` 保持 `NoTokenAuth`，仍拒绝 token 调用。
+
 ## 聚合 Token API（Session，`UserAuth + NoTokenAuth`）
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| GET | `/api/agg-token/` | 当前用户聚合 token 列表 |
+| GET | `/api/agg-token/` | 当前用户聚合 token 列表（支持 `?p=&page_size=`） |
 | POST | `/api/agg-token/` | 创建聚合 token |
 | PUT | `/api/agg-token/` | 更新聚合 token |
 | DELETE | `/api/agg-token/:id` | 删除聚合 token |
@@ -200,10 +257,17 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 | --- | --- | --- |
 | GET | `/api/route/` | 路由列表（支持 `?model=`） |
 | GET | `/api/route/overview` | 路由总览（支持 `model/provider_id/enabled_only`） |
-| GET | `/api/route/models` | 已接入模型列表 |
+| GET | `/api/route/models` | 已接入 canonical 模型列表 |
 | PUT | `/api/route/:id` | 更新单条路由（priority/weight/enabled） |
 | POST | `/api/route/batch-update` | 批量更新路由 |
 | POST | `/api/route/rebuild` | 触发全量路由重建 |
+
+补充说明：
+
+- 模型查询与请求使用统一模型目录语义：
+  - 用户可使用 canonical、归一化别名、或供应商手动映射别名请求；
+  - Relay 会先解析为 canonical 语义，再选择路由并改写为上游目标模型；
+  - `model_limits` 校验按 canonical/alias/target 等价匹配。
 
 ## 日志与统计 API
 
@@ -222,6 +286,11 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 - `provider`：供应商名称精确筛选
 - `status`：`all` / `success` / `error`
 - `view`：`all` / `error`
+
+日志查询同样使用“管理列表分页约定”响应字段（`items/p/page_size/total/total_pages/has_more`），并额外返回：
+
+- `providers`：当前筛选条件下的供应商选项
+- `summary`：当前筛选条件下的聚合统计
 
 ### 仪表盘
 
@@ -262,6 +331,45 @@ curl http://localhost:3000/v1/chat/completions \
   -H "Authorization: Bearer ag-your-token" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}'
+```
+
+### 5. 插件接口：管理员 Token 查询供应商列表（成功示例）
+
+```bash
+curl 'http://localhost:3000/api/plugin/provider/?p=0&page_size=10' \
+  -H 'Authorization: Bearer <admin-user-token>'
+```
+
+### 6. 插件接口：仅 Session 调用插件路由（拒绝示例）
+
+```bash
+curl 'http://localhost:3000/api/plugin/provider/?p=0&page_size=10' \
+  -b 'session=<your-session-cookie>'
+```
+
+期望返回（示例）：
+
+```json
+{
+  "success": false,
+  "message": "本接口仅支持使用 token 进行验证"
+}
+```
+
+### 7. 旧管理路由：管理员 Token 访问 `/api/provider/*`（拒绝示例）
+
+```bash
+curl 'http://localhost:3000/api/provider/?p=0&page_size=10' \
+  -H 'Authorization: Bearer <admin-user-token>'
+```
+
+期望返回（示例）：
+
+```json
+{
+  "success": false,
+  "message": "本接口不支持使用 token 进行验证"
+}
 ```
 
 ## Relay 常见错误码

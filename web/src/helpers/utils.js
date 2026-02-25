@@ -157,3 +157,43 @@ export function timestamp2string(timestamp) {
     year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second
   );
 }
+
+export function normalizePaginatedData(data, fallback = {}) {
+  const fallbackPage = Number.isFinite(Number(fallback.p)) ? Number(fallback.p) : 0;
+  const fallbackPageSize = Number.isFinite(Number(fallback.page_size)) && Number(fallback.page_size) > 0
+    ? Number(fallback.page_size)
+    : 10;
+  const clampNonNegativeInt = (value, defaultValue) => {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n) || Number.isNaN(n) || n < 0) {
+      return defaultValue;
+    }
+    return n;
+  };
+
+  const payload = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const p = clampNonNegativeInt(payload.p ?? payload.page, fallbackPage);
+  const pageSize = clampNonNegativeInt(payload.page_size, fallbackPageSize) || fallbackPageSize;
+  const total = clampNonNegativeInt(payload.total, items.length);
+
+  let totalPages = clampNonNegativeInt(payload.total_pages, -1);
+  if (totalPages < 0) {
+    totalPages = pageSize > 0 ? Math.ceil(total / pageSize) : 0;
+  }
+
+  const hasMore = typeof payload.has_more === 'boolean'
+    ? payload.has_more
+    : (totalPages > 0 && p + 1 < totalPages);
+
+  return {
+    ...payload,
+    items,
+    p,
+    page: p,
+    page_size: pageSize,
+    total,
+    total_pages: totalPages,
+    has_more: hasMore
+  };
+}

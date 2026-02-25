@@ -1,9 +1,8 @@
 package controller
 
 import (
-	"encoding/json"
-	"NewAPI-Gateway/common"
 	"NewAPI-Gateway/model"
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -12,16 +11,13 @@ import (
 
 func GetAggTokens(c *gin.Context) {
 	userId := c.GetInt("id")
-	p, _ := strconv.Atoi(c.Query("p"))
-	if p < 0 {
-		p = 0
-	}
-	tokens, err := model.GetAllUserAggTokens(userId, p*common.ItemsPerPage, common.ItemsPerPage)
+	pagination := parsePaginationParams(c)
+	tokens, total, err := model.QueryUserAggTokens(userId, pagination.Offset, pagination.PageSize)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": tokens})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": buildPaginatedData(tokens, pagination, total)})
 }
 
 func CreateAggToken(c *gin.Context) {

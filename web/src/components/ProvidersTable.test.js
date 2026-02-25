@@ -15,6 +15,7 @@ jest.mock('../helpers', () => ({
     put: jest.fn(),
     delete: jest.fn(),
   },
+  normalizePaginatedData: jest.requireActual('../helpers/utils').normalizePaginatedData,
   showError: jest.fn(),
   showSuccess: jest.fn(),
   timestamp2string: (value) => `ts:${value}`,
@@ -40,7 +41,18 @@ describe('ProvidersTable', () => {
     API.get.mockImplementation((url) => {
       if (url.startsWith('/api/provider/?p=')) {
         return Promise.resolve({
-          data: { success: true, message: '', data: [] },
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [],
+              p: 0,
+              page_size: 10,
+              total: 0,
+              total_pages: 0,
+              has_more: false,
+            },
+          },
         });
       }
       if (url === '/api/provider/checkin/summary?limit=1') {
@@ -194,7 +206,18 @@ describe('ProvidersTable', () => {
     API.get.mockImplementation((url) => {
       if (url.startsWith('/api/provider/?p=')) {
         return Promise.resolve({
-          data: { success: true, message: '', data: [] },
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [],
+              p: 0,
+              page_size: 10,
+              total: 0,
+              total_pages: 0,
+              has_more: false,
+            },
+          },
         });
       }
       if (url === '/api/provider/checkin/summary?limit=1') {
@@ -257,7 +280,18 @@ describe('ProvidersTable', () => {
     API.get.mockImplementation((url) => {
       if (url.startsWith('/api/provider/?p=')) {
         return Promise.resolve({
-          data: { success: true, message: '', data: [] },
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [],
+              p: 0,
+              page_size: 10,
+              total: 0,
+              total_pages: 0,
+              has_more: false,
+            },
+          },
         });
       }
       if (url === '/api/provider/checkin/summary?limit=1') {
@@ -291,7 +325,18 @@ describe('ProvidersTable', () => {
     API.get.mockImplementation((url) => {
       if (url.startsWith('/api/provider/?p=')) {
         return Promise.resolve({
-          data: { success: true, message: '', data: [] },
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [],
+              p: 0,
+              page_size: 10,
+              total: 0,
+              total_pages: 0,
+              has_more: false,
+            },
+          },
         });
       }
       if (url === '/api/provider/checkin/summary?limit=1') {
@@ -345,7 +390,18 @@ describe('ProvidersTable', () => {
     API.get.mockImplementation((url) => {
       if (url.startsWith('/api/provider/?p=')) {
         return Promise.resolve({
-          data: { success: true, message: '', data: [] },
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [],
+              p: 0,
+              page_size: 10,
+              total: 0,
+              total_pages: 0,
+              has_more: false,
+            },
+          },
         });
       }
       if (url === '/api/provider/checkin/summary?limit=1') {
@@ -402,18 +458,25 @@ describe('ProvidersTable', () => {
           data: {
             success: true,
             message: '',
-            data: [
-              {
-                id: 1,
-                name: 'Provider-A',
-                base_url: 'https://example.com',
-                created_at: 1730000000,
-                status: 1,
-                checkin_enabled: false,
-                weight: 10,
-                priority: 0,
-              },
-            ],
+            data: {
+              items: [
+                {
+                  id: 1,
+                  name: 'Provider-A',
+                  base_url: 'https://example.com',
+                  created_at: 1730000000,
+                  status: 1,
+                  checkin_enabled: false,
+                  weight: 10,
+                  priority: 0,
+                },
+              ],
+              p: 0,
+              page_size: 10,
+              total: 1,
+              total_pages: 1,
+              has_more: false,
+            },
           },
         });
       }
@@ -454,18 +517,25 @@ describe('ProvidersTable', () => {
           data: {
             success: true,
             message: '',
-            data: [
-              {
-                id: 2,
-                name: 'Provider-B',
-                base_url: 'https://example.com',
-                created_at: 1730000000,
-                status: 1,
-                checkin_enabled: false,
-                weight: 10,
-                priority: 0,
-              },
-            ],
+            data: {
+              items: [
+                {
+                  id: 2,
+                  name: 'Provider-B',
+                  base_url: 'https://example.com',
+                  created_at: 1730000000,
+                  status: 1,
+                  checkin_enabled: false,
+                  weight: 10,
+                  priority: 0,
+                },
+              ],
+              p: 0,
+              page_size: 10,
+              total: 1,
+              total_pages: 1,
+              has_more: false,
+            },
           },
         });
       }
@@ -507,18 +577,25 @@ describe('ProvidersTable', () => {
           data: {
             success: true,
             message: '',
-            data: [
-              {
-                id: 3,
-                name: 'Provider-C',
-                base_url: 'https://example.com',
-                created_at: 1730000000,
-                status: 1,
-                checkin_enabled: true,
-                weight: 10,
-                priority: 0,
-              },
-            ],
+            data: {
+              items: [
+                {
+                  id: 3,
+                  name: 'Provider-C',
+                  base_url: 'https://example.com',
+                  created_at: 1730000000,
+                  status: 1,
+                  checkin_enabled: true,
+                  weight: 10,
+                  priority: 0,
+                },
+              ],
+              p: 0,
+              page_size: 10,
+              total: 1,
+              total_pages: 1,
+              has_more: false,
+            },
           },
         });
       }
@@ -559,18 +636,25 @@ describe('ProvidersTable', () => {
           data: {
             success: true,
             message: '',
-            data: [
-              {
-                id: 4,
-                name: 'Provider-D',
-                base_url: 'https://example.com',
-                created_at: 1730000000,
-                status: 1,
-                checkin_enabled: true,
-                weight: 10,
-                priority: 0,
-              },
-            ],
+            data: {
+              items: [
+                {
+                  id: 4,
+                  name: 'Provider-D',
+                  base_url: 'https://example.com',
+                  created_at: 1730000000,
+                  status: 1,
+                  checkin_enabled: true,
+                  weight: 10,
+                  priority: 0,
+                },
+              ],
+              p: 0,
+              page_size: 10,
+              total: 1,
+              total_pages: 1,
+              has_more: false,
+            },
           },
         });
       }

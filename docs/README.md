@@ -17,6 +17,7 @@
 | 首次部署/试用 | [QUICK_START.md](./QUICK_START.md) -> [CONFIGURATION.md](./CONFIGURATION.md) -> [DEPLOYMENT.md](./DEPLOYMENT.md) |
 | 接入调用 API | [ARCHITECTURE.md](./ARCHITECTURE.md) -> [API_REFERENCE.md](./API_REFERENCE.md) -> [FAQ.md](./FAQ.md) |
 | 供应商接入填写 | [provider-form-guide.md](./provider-form-guide.md) -> [provider-form-example.md](./provider-form-example.md) -> [OPERATIONS.md](./OPERATIONS.md) |
+| 插件对接供应商管理 | [provider-plugin-token-implementation.md](./provider-plugin-token-implementation.md) -> [API_REFERENCE.md](./API_REFERENCE.md) -> [FAQ.md](./FAQ.md) |
 | 日常运维值守 | [OPERATIONS.md](./OPERATIONS.md) -> [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) -> [FAQ.md](./FAQ.md) |
 | 二次开发 | [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) -> [DEVELOPMENT.md](./DEVELOPMENT.md) -> [API_REFERENCE.md](./API_REFERENCE.md) |
 
@@ -39,6 +40,8 @@
 | 专题 | [model-alias-manual-mapping.md](./model-alias-manual-mapping.md) | 供应商模型别名手动映射 |
 | 专题 | [provider-form-guide.md](./provider-form-guide.md) | 添加供应商字段获取说明（Access Token / Upstream User ID） |
 | 专题 | [provider-form-example.md](./provider-form-example.md) | 添加供应商与创建上游令牌填写示例 |
+| 专题 | [provider-plugin-token-implementation.md](./provider-plugin-token-implementation.md) | 插件通过个人访问令牌对接供应商管理的改造实施方案 |
+| 专题 | [pagination-migration.md](./pagination-migration.md) | 管理列表分页协议迁移与兼容策略 |
 | 专题 | [FAQ.md](./FAQ.md) | 高频问题与排障捷径 |
 | 合规 | [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) | 第三方许可声明 |
 
@@ -47,12 +50,14 @@
 | 变更类型 | 必须同步文档 |
 | --- | --- |
 | 新增/修改 Relay 或管理接口 | [API_REFERENCE.md](./API_REFERENCE.md), [README.md](../README.md) |
+| 管理列表分页协议变更 | [API_REFERENCE.md](./API_REFERENCE.md), [pagination-migration.md](./pagination-migration.md), [DEVELOPMENT.md](./DEVELOPMENT.md) |
 | 路由算法、代理行为、同步流程变更 | [ARCHITECTURE.md](./ARCHITECTURE.md), [OPERATIONS.md](./OPERATIONS.md) |
 | 环境变量、启动参数、默认值变更 | [CONFIGURATION.md](./CONFIGURATION.md), [DEPLOYMENT.md](./DEPLOYMENT.md) |
 | 数据表/字段语义变更 | [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md), [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | 新增模块或目录调整 | [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md), [DEVELOPMENT.md](./DEVELOPMENT.md) |
 | 供应商模型映射策略变更 | [model-alias-manual-mapping.md](./model-alias-manual-mapping.md), [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | 供应商接入表单字段与交互变更 | [provider-form-guide.md](./provider-form-guide.md), [provider-form-example.md](./provider-form-example.md), [README.md](../README.md) |
+| 插件 Token 接口或鉴权策略变更 | [provider-plugin-token-implementation.md](./provider-plugin-token-implementation.md), [API_REFERENCE.md](./API_REFERENCE.md), [FAQ.md](./FAQ.md) |
 
 ## 文档维护约定
 

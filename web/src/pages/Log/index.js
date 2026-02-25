@@ -2,10 +2,12 @@ import React from 'react';
 import LogsTable from '../../components/LogsTable';
 
 const Log = () => (
-    <>
-        <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem' }}>日志查询</h2>
+    <div className='page-shell'>
+        <div className='page-header'>
+            <h2 className='page-title'>日志查询</h2>
+        </div>
         <LogsTable selfOnly={false} />
-    </>
+    </div>
 );
 
 export default Log;

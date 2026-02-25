@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -11,7 +11,7 @@ import {
   Download,
   Upload
 } from 'lucide-react';
-import { API, showError, showSuccess, timestamp2string } from '../helpers';
+import { API, normalizePaginatedData, showError, showSuccess, timestamp2string } from '../helpers';
 import { ITEMS_PER_PAGE } from '../constants';
 import { Table, Thead, Tbody, Tr, Th, Td } from './ui/Table';
 import Button from './ui/Button';
@@ -36,62 +36,29 @@ const ProvidersTable = () => {
   const [showModal, setShowModal] = useState(false);
   const [editProvider, setEditProvider] = useState(null);
   const [activePage, setActivePage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
-  const inFlightPagesRef = useRef(new Set());
-  const loadedPagesRef = useRef(new Set());
-  const fetchEpochRef = useRef(0);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
 
-  const loadProviders = useCallback(async (startIdx = 0) => {
-    // Prevent concurrent duplicated fetch for the same page.
-    if (inFlightPagesRef.current.has(startIdx)) {
-      return 0;
-    }
-    // Skip already loaded page (page 0 is reserved for full refresh).
-    if (startIdx !== 0 && loadedPagesRef.current.has(startIdx)) {
-      return 0;
-    }
-
-    const requestEpoch = fetchEpochRef.current;
-    inFlightPagesRef.current.add(startIdx);
+  const loadProviders = useCallback(async (page = 0) => {
     setLoading(true);
     try {
-      const res = await API.get(`/api/provider/?p=${startIdx}`);
+      const res = await API.get(`/api/provider/?p=${page}&page_size=${ITEMS_PER_PAGE}`);
       const { success, data, message } = res.data;
-      // Ignore stale response from previous reload.
-      if (requestEpoch !== fetchEpochRef.current) {
-        return 0;
-      }
       if (success) {
-        const nextProviders = data || [];
-        setHasMore(nextProviders.length === ITEMS_PER_PAGE);
-        if (startIdx === 0) {
-          loadedPagesRef.current = new Set([0]);
-          setProviders(nextProviders);
-        } else {
-          loadedPagesRef.current.add(startIdx);
-          setProviders((prevProviders) => {
-            const seen = new Set(prevProviders.map((item) => item.id));
-            const merged = [...prevProviders];
-            nextProviders.forEach((item) => {
-              if (!seen.has(item.id)) {
-                seen.add(item.id);
-                merged.push(item);
-              }
-            });
-            return merged;
-          });
-        }
-        return nextProviders.length;
+        const normalized = normalizePaginatedData(data, { p: page, page_size: ITEMS_PER_PAGE });
+        const nextProviders = Array.isArray(normalized.items) ? normalized.items : [];
+        setProviders(nextProviders);
+        setTotal(Number(normalized.total || 0));
+        setTotalPages(Number(normalized.total_pages || 0));
+        return;
       } else {
         showError(message);
       }
     } catch (e) {
       showError('加载供应商失败');
     } finally {
-      inFlightPagesRef.current.delete(startIdx);
       setLoading(false);
     }
-    return 0;
   }, []);
 
   const loadCheckinOverview = useCallback(async () => {
@@ -129,17 +96,21 @@ const ProvidersTable = () => {
   }, []);
 
   const reloadProviders = useCallback(async () => {
-    fetchEpochRef.current += 1;
-    inFlightPagesRef.current.clear();
-    loadedPagesRef.current.clear();
-    setActivePage(1);
-    await Promise.all([loadProviders(0), loadCheckinOverview()]);
-  }, [loadCheckinOverview, loadProviders]);
+    if (activePage !== 1) {
+      setActivePage(1);
+    } else {
+      await loadProviders(0);
+    }
+    await loadCheckinOverview();
+  }, [activePage, loadCheckinOverview, loadProviders]);
 
   useEffect(() => {
-    loadProviders(0);
+    loadProviders(activePage - 1);
+  }, [activePage, loadProviders]);
+
+  useEffect(() => {
     loadCheckinOverview();
-  }, [loadCheckinOverview, loadProviders]);
+  }, [loadCheckinOverview]);
 
   const deleteProvider = async (id) => {
     if (!window.confirm('确定要删除此供应商吗？')) return;
@@ -342,20 +313,13 @@ const ProvidersTable = () => {
 
   const onPaginationChange = async (e, { activePage: nextActivePage }) => {
     if (nextActivePage < 1) return;
-    const loadedPages = Math.max(1, Math.ceil(providers.length / ITEMS_PER_PAGE));
-    if (nextActivePage > loadedPages) {
-      if (!hasMore) return;
-      const loadedCount = await loadProviders(nextActivePage - 1);
-      if (loadedCount === 0) return;
+    const effectiveTotalPages = Math.max(totalPages, 1);
+    if (nextActivePage > effectiveTotalPages) {
+      return;
     }
     setActivePage(nextActivePage);
   };
-
-  const displayedProviders = providers.slice(
-    (activePage - 1) * ITEMS_PER_PAGE,
-    activePage * ITEMS_PER_PAGE
-  );
-  const totalPages = Math.max(1, Math.ceil(providers.length / ITEMS_PER_PAGE) + (hasMore ? 1 : 0));
+  const displayedProviders = providers;
 
   return (
     <>
@@ -420,7 +384,7 @@ const ProvidersTable = () => {
                       </div>
                       <div style={{ marginTop: '0.25rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>{item.message || '-'}</div>
                       {autoDisabledByUpstream && (
-                        <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', color: 'var(--warning-color, #d97706)' }}>
+                        <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', color: 'var(--warning-color)' }}>
                           签到功能上游未启用，已自动关闭该供应商签到
                         </div>
                       )}
@@ -528,14 +492,14 @@ const ProvidersTable = () => {
         )}
 
         {!loading && (
-          <div style={{ padding: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-              已加载 {providers.length} 条记录
+          <div className='table-footer'>
+            <div className='table-footer-meta'>
+              共 {total} 条记录
             </div>
             <Pagination
               activePage={activePage}
               onPageChange={onPaginationChange}
-              totalPages={totalPages}
+              totalPages={Math.max(totalPages, 1)}
             />
           </div>
         )}

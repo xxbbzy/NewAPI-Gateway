@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { API, copy, showError, showSuccess } from '../helpers';
+import { API, copy, normalizePaginatedData, showError, showSuccess } from '../helpers';
 import { useDropzone } from 'react-dropzone';
 import { ITEMS_PER_PAGE } from '../constants';
 import { Table, Thead, Tbody, Tr, Th, Td } from './ui/Table';
@@ -13,46 +13,50 @@ const FilesTable = () => {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activePage, setActivePage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [total, setTotal] = useState(0);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searching, setSearching] = useState(false);
+  const [searchMode, setSearchMode] = useState(false);
   const { acceptedFiles, getRootProps, getInputProps } = useDropzone();
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  const loadFiles = async (startIdx) => {
-    const res = await API.get(`/api/file/?p=${startIdx}`);
-    const { success, message, data } = res.data;
-    if (success) {
-      if (startIdx === 0) {
-        setFiles(data);
+  const loadFiles = async (page) => {
+    setLoading(true);
+    try {
+      const res = await API.get(`/api/file/?p=${page}&page_size=${ITEMS_PER_PAGE}`);
+      const { success, message, data } = res.data;
+      if (success) {
+        const normalized = normalizePaginatedData(data, { p: page, page_size: ITEMS_PER_PAGE });
+        setFiles(Array.isArray(normalized.items) ? normalized.items : []);
+        setTotalPages(Number(normalized.total_pages || 0));
+        setTotal(Number(normalized.total || 0));
+        setSearchMode(false);
       } else {
-        let newFiles = files;
-        newFiles.push(...data);
-        setFiles(newFiles);
+        showError(message);
       }
-    } else {
-      showError(message);
+    } catch (error) {
+      showError('加载文件失败');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const onPaginationChange = (e, { activePage }) => {
-    (async () => {
-      if (activePage === Math.ceil(files.length / ITEMS_PER_PAGE) + 1) {
-        // In this case we have to load more data and then append them.
-        await loadFiles(activePage - 1);
-      }
-      setActivePage(activePage);
-    })();
+    if (searchMode) return;
+    if (activePage < 1) return;
+    const effectiveTotalPages = Math.max(totalPages, 1);
+    if (activePage > effectiveTotalPages) return;
+    setActivePage(activePage);
   };
 
   useEffect(() => {
-    loadFiles(0)
-      .then()
-      .catch((reason) => {
-        showError(reason);
-      });
-  }, []);
+    if (searchMode) return;
+    loadFiles(activePage - 1).catch((reason) => {
+      showError(reason);
+    });
+  }, [activePage, searchMode]);
 
   const downloadFile = (link, filename) => {
     let linkElement = document.createElement('a');
@@ -72,7 +76,7 @@ const FilesTable = () => {
     const { success, message } = res.data;
     if (success) {
       let newFiles = [...files];
-      let realIdx = (activePage - 1) * ITEMS_PER_PAGE + idx;
+      const realIdx = idx;
       newFiles[realIdx].deleted = true;
       setFiles(newFiles);
       showSuccess('文件已删除！');
@@ -92,8 +96,11 @@ const FilesTable = () => {
     const res = await API.get(`/api/file/search?keyword=${searchKeyword}`);
     const { success, message, data } = res.data;
     if (success) {
-      setFiles(data);
+      setFiles(Array.isArray(data) ? data : []);
       setActivePage(1);
+      setTotalPages(1);
+      setTotal(Array.isArray(data) ? data.length : 0);
+      setSearchMode(true);
     } else {
       showError(message);
     }
@@ -143,6 +150,7 @@ const FilesTable = () => {
     setUploading(false);
     setUploadProgress(0);
     setSearchKeyword('');
+    setSearchMode(false);
     loadFiles(0).then();
     setActivePage(1);
   };
@@ -150,6 +158,8 @@ const FilesTable = () => {
   useEffect(() => {
     uploadFiles().then();
   }, [acceptedFiles]);
+
+  const visibleFiles = files.filter((file) => !file.deleted);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -202,13 +212,8 @@ const FilesTable = () => {
             </Tr>
           </Thead>
           <Tbody>
-            {files
-              .slice(
-                (activePage - 1) * ITEMS_PER_PAGE,
-                activePage * ITEMS_PER_PAGE
-              )
+            {visibleFiles
               .map((file, idx) => {
-                if (file.deleted) return null;
                 return (
                   <Tr key={file.id}>
                     <Td>
@@ -250,13 +255,11 @@ const FilesTable = () => {
               })}
           </Tbody>
         </Table>
-        <div style={{ padding: '1rem', borderTop: '1px solid var(--border-color)' }}>
+        <div className='table-footer'>
+          <div className='table-footer-meta'>共 {searchMode ? visibleFiles.length : total} 条记录</div>
           <Pagination
             activePage={activePage}
-            totalPages={
-              Math.ceil(files.length / ITEMS_PER_PAGE) +
-              (files.length % ITEMS_PER_PAGE === 0 ? 1 : 0)
-            }
+            totalPages={Math.max(searchMode ? 1 : totalPages, 1)}
             onPageChange={onPaginationChange}
           />
         </div>

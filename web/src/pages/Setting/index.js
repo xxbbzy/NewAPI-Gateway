@@ -25,12 +25,14 @@ const Setting = () => {
   }
 
   return (
-    <>
-      <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1.5rem' }}>设置</h2>
-      <div style={{ backgroundColor: 'var(--bg-primary)', padding: '1.5rem', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-sm)' }}>
+    <div className='page-shell'>
+      <div className='page-header'>
+        <h2 className='page-title'>设置</h2>
+      </div>
+      <div className='page-section page-section--tight'>
         <Tabs items={tabs} />
       </div>
-    </>
+    </div>
   );
 };
 

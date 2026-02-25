@@ -26,11 +26,8 @@ var syncProviderAfterTokenCreate = func(provider *model.Provider) {
 }
 
 func GetProviders(c *gin.Context) {
-	p, _ := strconv.Atoi(c.Query("p"))
-	if p < 0 {
-		p = 0
-	}
-	providers, err := model.GetAllProviders(p*common.ItemsPerPage, common.ItemsPerPage)
+	pagination := parsePaginationParams(c)
+	providers, total, err := model.QueryProviders(pagination.Offset, pagination.PageSize)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
@@ -39,7 +36,7 @@ func GetProviders(c *gin.Context) {
 	for _, provider := range providers {
 		provider.CleanForResponse()
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": providers})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": buildPaginatedData(providers, pagination, total)})
 }
 
 func GetProviderDetail(c *gin.Context) {
@@ -232,7 +229,8 @@ func ImportProviders(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "JSON 格式错误: " + err.Error()})
 		return
 	}
-	imported := 0
+	created := 0
+	updated := 0
 	skipped := 0
 	for _, item := range items {
 		if item.Name == "" || item.BaseURL == "" || item.AccessToken == "" {
@@ -240,33 +238,71 @@ func ImportProviders(c *gin.Context) {
 			continue
 		}
 		uid, _ := item.UserID.Int64()
-		p := model.Provider{
-			Name:           item.Name,
-			BaseURL:        item.BaseURL,
-			AccessToken:    item.AccessToken,
-			UserID:         int(uid),
-			Status:         item.Status,
-			Priority:       item.Priority,
-			Weight:         item.Weight,
-			CheckinEnabled: item.CheckinEnabled,
-			Remark:         item.Remark,
-		}
+		userID := int(uid)
+
+		aliasMapping := ""
 		if payload, err := model.MarshalProviderAliasMapping(item.ModelAliasMapping); err == nil {
-			p.ModelAliasMapping = payload
+			aliasMapping = payload
 		}
-		if p.Status == 0 {
-			p.Status = 1
+
+		status := item.Status
+		if status == 0 {
+			status = 1
 		}
-		if p.Weight == 0 {
-			p.Weight = 10
+		weight := item.Weight
+		if weight == 0 {
+			weight = 10
 		}
-		if err := p.Insert(); err != nil {
+
+		// Conflict detection: use (base_url, user_id) as logical unique key
+		// - Same base_url + same user_id → update existing record
+		// - Same base_url + different user_id → create new (multi-account coexistence)
+		// - New base_url → create new
+		existing, err := model.FindProviderByBaseURLAndUserID(item.BaseURL, userID)
+		if err != nil {
 			skipped++
+			continue
+		}
+
+		if existing != nil {
+			// Update existing provider
+			existing.Name = item.Name
+			existing.AccessToken = item.AccessToken
+			existing.Status = status
+			existing.Priority = item.Priority
+			existing.Weight = weight
+			existing.CheckinEnabled = item.CheckinEnabled
+			existing.Remark = item.Remark
+			if aliasMapping != "" {
+				existing.ModelAliasMapping = aliasMapping
+			}
+			if err := existing.Update(); err != nil {
+				skipped++
+			} else {
+				updated++
+			}
 		} else {
-			imported++
+			// Create new provider
+			p := model.Provider{
+				Name:              item.Name,
+				BaseURL:           item.BaseURL,
+				AccessToken:       item.AccessToken,
+				UserID:            userID,
+				Status:            status,
+				Priority:          item.Priority,
+				Weight:            weight,
+				CheckinEnabled:    item.CheckinEnabled,
+				ModelAliasMapping: aliasMapping,
+				Remark:            item.Remark,
+			}
+			if err := p.Insert(); err != nil {
+				skipped++
+			} else {
+				created++
+			}
 		}
 	}
-	msg := fmt.Sprintf("成功导入 %d 个，跳过 %d 个", imported, skipped)
+	msg := fmt.Sprintf("新增 %d 个，更新 %d 个，跳过 %d 个", created, updated, skipped)
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": msg})
 }
 

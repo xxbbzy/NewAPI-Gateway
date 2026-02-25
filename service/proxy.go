@@ -61,7 +61,7 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 
 	resolvedModel := strings.TrimSpace(c.GetString("request_model_resolved"))
 	if resolvedModel == "" {
-		resolvedModel = strings.TrimSpace(c.GetString("request_model"))
+		resolvedModel = getContextModelName(c)
 	}
 	bodyBytes = rewriteRequestModel(bodyBytes, resolvedModel)
 
@@ -128,7 +128,7 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 			token,
 			c,
 			requestId,
-			usageMetrics{ModelName: c.GetString("request_model")},
+			usageMetrics{ModelName: getContextModelName(c)},
 			false,
 			0,
 			0,
@@ -150,7 +150,7 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 		respBody, _ := io.ReadAll(resp.Body)
 		usage := extractUsageAndModelFromJSON(respBody)
 		if usage.ModelName == "" {
-			usage.ModelName = c.GetString("request_model")
+			usage.ModelName = getContextModelName(c)
 		}
 		errorMsg := buildErrorMessage(fmt.Sprintf("upstream status %d: %s", resp.StatusCode, string(respBody)), c, bodyBytes)
 		logProxyErrorTrace(c, requestId, provider, token, errorMsg)
@@ -227,7 +227,7 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 			logProxyErrorTrace(c, requestId, provider, token, errorMsg)
 		}
 		if streamUsage.ModelName == "" {
-			streamUsage.ModelName = c.GetString("request_model")
+			streamUsage.ModelName = getContextModelName(c)
 		}
 		elapsed := time.Since(startTime).Milliseconds()
 		logUsage(
@@ -243,7 +243,7 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 		elapsed := time.Since(startTime).Milliseconds()
 		usage := extractUsageAndModelFromJSON(respBody)
 		if usage.ModelName == "" {
-			usage.ModelName = c.GetString("request_model")
+			usage.ModelName = getContextModelName(c)
 		}
 		errorMsg := ""
 		if resp.StatusCode >= 400 {
@@ -319,7 +319,7 @@ func logUsage(aggToken *model.AggregatedToken, provider *model.Provider, token *
 
 	// Try to extract model from request path or body
 	if usage.ModelName == "" {
-		usage.ModelName = c.GetString("request_model")
+		usage.ModelName = getContextModelName(c)
 	}
 	if usage.CostUSD <= 0 {
 		usage.CostUSD = estimateUsageCostUSD(
@@ -455,17 +455,37 @@ func logProxyErrorTrace(c *gin.Context, requestId string, provider *model.Provid
 		compactError = compactError[:1200] + "...(truncated)"
 	}
 	common.SysError(fmt.Sprintf(
-		"[proxy-error] request_id=%s method=%s path=%s provider=%s provider_id=%d provider_token_id=%d model=%s client_ip=%s detail=%s",
+		"[proxy-error] request_id=%s method=%s path=%s provider=%s provider_id=%d provider_token_id=%d model=%s model_original=%s model_canonical=%s model_resolved=%s client_ip=%s detail=%s",
 		requestId,
 		c.Request.Method,
 		c.Request.URL.Path,
 		provider.Name,
 		provider.Id,
 		token.Id,
-		c.GetString("request_model"),
+		getContextModelName(c),
+		c.GetString("request_model_original"),
+		c.GetString("request_model_canonical"),
+		c.GetString("request_model_resolved"),
 		c.ClientIP(),
 		compactError,
 	))
+}
+
+func getContextModelName(c *gin.Context) string {
+	modelName := strings.TrimSpace(c.GetString("request_model_resolved"))
+	if modelName != "" {
+		return modelName
+	}
+	modelName = strings.TrimSpace(c.GetString("request_model"))
+	if modelName != "" {
+		return modelName
+	}
+	modelName = strings.TrimSpace(c.GetString("request_model_canonical"))
+	if modelName != "" {
+		return modelName
+	}
+	modelName = strings.TrimSpace(c.GetString("request_model_original"))
+	return modelName
 }
 
 func extractUsageAndModelFromSSELine(line string) (usageMetrics, bool) {

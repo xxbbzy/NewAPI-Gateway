@@ -28,8 +28,8 @@ const RawErrorView = () => {
   }, [key]);
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0b1020', color: '#dbeafe', padding: '20px' }}>
-      <div style={{ marginBottom: '12px', fontSize: '13px', color: '#93c5fd' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-secondary)', color: 'var(--text-primary)', padding: '20px' }}>
+      <div style={{ marginBottom: '12px', fontSize: '13px', color: 'var(--text-secondary)' }}>
         request_id: {requestId || '-'} | key: {key || '-'}
       </div>
       <pre
@@ -38,8 +38,9 @@ const RawErrorView = () => {
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
           lineHeight: 1.45,
-          background: '#111827',
-          border: '1px solid #1f2937',
+          background: 'var(--bg-primary)',
+          border: '1px solid var(--border-color)',
+          color: 'var(--text-primary)',
           borderRadius: '8px',
           padding: '16px',
           fontSize: '13px',

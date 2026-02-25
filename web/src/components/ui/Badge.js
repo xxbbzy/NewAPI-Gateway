@@ -7,6 +7,8 @@ const Badge = ({ children, color = 'gray' }) => {
         red: { bg: 'rgba(239, 68, 68, 0.1)', text: 'var(--error)' },
         blue: { bg: 'rgba(59, 130, 246, 0.1)', text: 'var(--info)' },
         yellow: { bg: 'rgba(245, 158, 11, 0.1)', text: 'var(--warning)' },
+        orange: { bg: 'rgba(245, 158, 11, 0.12)', text: 'var(--warning-color)' },
+        purple: { bg: 'rgba(139, 92, 246, 0.14)', text: '#8b5cf6' },
     };
 
     const style = colors[color] || colors.gray;

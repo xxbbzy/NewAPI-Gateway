@@ -38,6 +38,25 @@ func GetAllUserAggTokens(userId int, startIdx int, num int) ([]*AggregatedToken,
 	return tokens, err
 }
 
+func QueryUserAggTokens(userId int, startIdx int, num int) ([]*AggregatedToken, int64, error) {
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if num <= 0 {
+		num = common.ItemsPerPage
+	}
+
+	base := DB.Model(&AggregatedToken{}).Where("user_id = ?", userId)
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var tokens []*AggregatedToken
+	err := base.Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
+	return tokens, total, err
+}
+
 func GetAggTokenById(id int, userId int) (*AggregatedToken, error) {
 	if id == 0 {
 		return nil, errors.New("id 为空")
@@ -115,6 +134,15 @@ func (t *AggregatedToken) IsModelAllowed(model string) bool {
 	}
 
 	appendCandidate(requested)
+	if entry, ok, err := ResolveModelCatalogEntry(requested); err == nil && ok && entry != nil {
+		appendCandidate(entry.CanonicalModel)
+		for _, alias := range entry.Aliases {
+			appendCandidate(alias)
+		}
+		for _, target := range entry.RouteTargets {
+			appendCandidate(target)
+		}
+	}
 
 	limits := strings.Split(t.ModelLimits, ",")
 	for _, m := range limits {

@@ -23,9 +23,11 @@ type routingStaticSnapshot struct {
 	routesByProviderExactModel map[int]map[string][]ModelRoute
 	routesByProviderNormModel  map[int]map[string][]ModelRoute
 	providerAliasLookups       map[int]providerModelAliasLookup
+	providerAliasReverseLookup map[int]providerModelAliasReverseLookup
 	providersByID              map[int]*Provider
 	tokensByID                 map[int]*ProviderToken
 	pricingLookup              map[string]ModelPricing
+	modelCatalog               modelCatalogSnapshot
 }
 
 type routingUsageCacheEntry struct {
@@ -122,9 +124,11 @@ func buildRoutingStaticSnapshot() (*routingStaticSnapshot, error) {
 		routesByProviderExactModel: make(map[int]map[string][]ModelRoute),
 		routesByProviderNormModel:  make(map[int]map[string][]ModelRoute),
 		providerAliasLookups:       make(map[int]providerModelAliasLookup),
+		providerAliasReverseLookup: make(map[int]providerModelAliasReverseLookup),
 		providersByID:              make(map[int]*Provider),
 		tokensByID:                 make(map[int]*ProviderToken),
 		pricingLookup:              make(map[string]ModelPricing),
+		modelCatalog:               newModelCatalogSnapshot(),
 	}
 
 	var routes []ModelRoute
@@ -168,7 +172,9 @@ func buildRoutingStaticSnapshot() (*routingStaticSnapshot, error) {
 		for i := range providers {
 			provider := &providers[i]
 			snapshot.providersByID[provider.Id] = provider
-			snapshot.providerAliasLookups[provider.Id] = buildProviderModelAliasLookup(ParseProviderAliasMapping(provider.ModelAliasMapping))
+			mapping := ParseProviderAliasMapping(provider.ModelAliasMapping)
+			snapshot.providerAliasLookups[provider.Id] = buildProviderModelAliasLookup(mapping)
+			snapshot.providerAliasReverseLookup[provider.Id] = buildProviderModelAliasReverseLookup(mapping)
 		}
 	}
 
@@ -223,6 +229,8 @@ func buildRoutingStaticSnapshot() (*routingStaticSnapshot, error) {
 		}
 	}
 
+	snapshot.modelCatalog = buildModelCatalogSnapshot(routes, snapshot.providerAliasReverseLookup)
+
 	return snapshot, nil
 }
 
@@ -258,6 +266,26 @@ func getCandidateRoutesByModelCached(requestedModel string) ([]ModelRoute, error
 		requestedVersionKey := common.ToVersionAgnosticKey(requestedNormalized)
 		if requestedVersionKey != "" {
 			appendCandidates(snapshot.routesByVersionAgnostic[requestedVersionKey])
+		}
+	}
+
+	if entry, ok := snapshot.modelCatalog.resolve(requestedModel); ok {
+		for _, target := range entry.RouteTargets {
+			target = strings.TrimSpace(target)
+			if target == "" {
+				continue
+			}
+			appendCandidates(snapshot.routesByExactModel[strings.ToLower(target)])
+
+			normalizedTarget := common.NormalizeModelName(target)
+			if normalizedTarget == "" {
+				continue
+			}
+			appendCandidates(snapshot.routesByNormalizedModel[normalizedTarget])
+			versionKey := common.ToVersionAgnosticKey(normalizedTarget)
+			if versionKey != "" {
+				appendCandidates(snapshot.routesByVersionAgnostic[versionKey])
+			}
 		}
 	}
 

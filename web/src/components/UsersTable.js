@@ -10,7 +10,7 @@ import {
   CheckCircle
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { API, getRoleName, showError, showSuccess } from '../helpers';
+import { API, getRoleName, normalizePaginatedData, showError, showSuccess } from '../helpers';
 import { ITEMS_PER_PAGE } from '../constants';
 import { Table, Thead, Tbody, Tr, Th, Td } from './ui/Table';
 import Button from './ui/Button';
@@ -35,19 +35,23 @@ const UsersTable = () => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activePage, setActivePage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [total, setTotal] = useState(0);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searching, setSearching] = useState(false);
+  const [searchMode, setSearchMode] = useState(false);
 
-  const loadUsers = useCallback(async (startIdx) => {
+  const loadUsers = useCallback(async (page) => {
+    setLoading(true);
     try {
-      const res = await API.get(`/api/user/?p=${startIdx}`);
+      const res = await API.get(`/api/user/?p=${page}&page_size=${ITEMS_PER_PAGE}`);
       const { success, message, data } = res.data;
       if (success) {
-        if (startIdx === 0) {
-          setUsers(data);
-        } else {
-          setUsers((prevUsers) => [...prevUsers, ...(data || [])]);
-        }
+        const normalized = normalizePaginatedData(data, { p: page, page_size: ITEMS_PER_PAGE });
+        setUsers(Array.isArray(normalized.items) ? normalized.items : []);
+        setTotalPages(Number(normalized.total_pages || 0));
+        setTotal(Number(normalized.total || 0));
+        setSearchMode(false);
       } else {
         showError(message);
       }
@@ -59,17 +63,17 @@ const UsersTable = () => {
   }, []);
 
   const onPaginationChange = (e, { activePage }) => {
-    (async () => {
-      if (activePage === Math.ceil(users.length / ITEMS_PER_PAGE) + 1) {
-        await loadUsers(activePage - 1);
-      }
-      setActivePage(activePage);
-    })();
+    if (searchMode) return;
+    if (activePage < 1) return;
+    const effectiveTotalPages = Math.max(totalPages, 1);
+    if (activePage > effectiveTotalPages) return;
+    setActivePage(activePage);
   };
 
   useEffect(() => {
-    loadUsers(0);
-  }, [loadUsers]);
+    if (searchMode) return;
+    loadUsers(activePage - 1);
+  }, [activePage, loadUsers, searchMode]);
 
   const manageUser = (username, action, idx) => {
     (async () => {
@@ -82,7 +86,7 @@ const UsersTable = () => {
         showSuccess('操作成功完成！');
         let user = res.data.data;
         let newUsers = [...users];
-        let realIdx = (activePage - 1) * ITEMS_PER_PAGE + idx;
+        const realIdx = idx;
         if (action === 'delete') {
           newUsers[realIdx].deleted = true;
         } else {
@@ -119,8 +123,11 @@ const UsersTable = () => {
     const res = await API.get(`/api/user/search?keyword=${encodeURIComponent(keyword)}`);
     const { success, message, data } = res.data;
     if (success) {
-      setUsers(data);
+      setUsers(Array.isArray(data) ? data : []);
       setActivePage(1);
+      setTotalPages(1);
+      setTotal(Array.isArray(data) ? data.length : 0);
+      setSearchMode(true);
     } else {
       showError(message);
     }
@@ -133,8 +140,9 @@ const UsersTable = () => {
 
   const resetSearch = async () => {
     setSearchKeyword('');
-    await loadUsers(0);
+    setSearchMode(false);
     setActivePage(1);
+    await loadUsers(0);
   };
 
   const sortUser = (key) => {
@@ -150,6 +158,8 @@ const UsersTable = () => {
     setUsers(sortedUsers);
     setLoading(false);
   };
+
+  const visibleUsers = users.filter((user) => !user.deleted);
 
   return (
     <Card padding="0">
@@ -187,13 +197,8 @@ const UsersTable = () => {
               </Tr>
             </Thead>
             <Tbody>
-              {users
-                .slice(
-                  (activePage - 1) * ITEMS_PER_PAGE,
-                  activePage * ITEMS_PER_PAGE
-                )
+              {visibleUsers
                 .map((user, idx) => {
-                  if (user.deleted) return null;
                   return (
                     <Tr key={user.id}>
                       <Td>{user.username}</Td>
@@ -247,14 +252,12 @@ const UsersTable = () => {
                 })}
             </Tbody>
           </Table>
-          <div style={{ padding: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end' }}>
+          <div className='table-footer'>
+            <div className='table-footer-meta'>共 {searchMode ? visibleUsers.length : total} 条记录</div>
             <Pagination
               activePage={activePage}
               onPageChange={onPaginationChange}
-              totalPages={
-                Math.ceil(users.length / ITEMS_PER_PAGE) +
-                (users.length % ITEMS_PER_PAGE === 0 ? 1 : 0)
-              }
+              totalPages={Math.max(searchMode ? 1 : totalPages, 1)}
             />
           </div>
         </>

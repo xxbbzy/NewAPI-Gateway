@@ -182,8 +182,8 @@ curl https://your-gateway.com/v1/chat/completions \
 | POST   | `/v1/moderations`                 | 内容审核              |
 | POST   | `/v1/video/generations`           | 视频生成              |
 | POST   | `/v1beta/models/*`                | Gemini 兼容           |
-| GET    | `/v1/models`                      | 查看所有可用模型      |
-| GET    | `/v1/models/:model`               | 查看特定模型信息      |
+| GET    | `/v1/models`                      | 查看所有可用 canonical 模型 |
+| GET    | `/v1/models/:model`               | 按 canonical/alias 查询模型信息 |
 | GET    | `/dashboard/billing/subscription` | 余额查询（兼容）      |
 | GET    | `/dashboard/billing/usage`        | 用量查询（兼容）      |
 
@@ -219,7 +219,7 @@ curl https://your-gateway.com/v1/chat/completions \
 | Method | Path                 | 说明              |
 | ------ | -------------------- | ----------------- |
 | GET    | `/api/route/`        | 查看路由表        |
-| GET    | `/api/route/models`  | 所有可用模型      |
+| GET    | `/api/route/models`  | 所有可用 canonical 模型 |
 | PUT    | `/api/route/:id`     | 更新路由权重/状态 |
 | POST   | `/api/route/rebuild` | 重建路由表        |
 
@@ -269,6 +269,7 @@ curl https://your-gateway.com/v1/chat/completions \
 实现入口：`model.BuildRouteAttemptsByPriority`（`model/model_route.go`）与 `controller.Relay`。
 
 1. **候选路由筛选**（仅启用路由）：
+   - 统一模型目录（Model Catalog）解析（canonical/alias/target 语义统一）；
    - 精确模型名匹配；
    - 模型名归一化匹配；
    - 版本无关键匹配；

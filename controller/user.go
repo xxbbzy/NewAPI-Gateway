@@ -1,9 +1,9 @@
 package controller
 
 import (
-	"encoding/json"
 	"NewAPI-Gateway/common"
 	"NewAPI-Gateway/model"
+	"encoding/json"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -174,11 +174,8 @@ func Register(c *gin.Context) {
 }
 
 func GetAllUsers(c *gin.Context) {
-	p, _ := strconv.Atoi(c.Query("p"))
-	if p < 0 {
-		p = 0
-	}
-	users, err := model.GetAllUsers(p*common.ItemsPerPage, common.ItemsPerPage)
+	pagination := parsePaginationParams(c)
+	users, total, err := model.QueryUsers(pagination.Offset, pagination.PageSize)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -189,7 +186,7 @@ func GetAllUsers(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    users,
+		"data":    buildPaginatedData(users, pagination, total),
 	})
 	return
 }

@@ -3,9 +3,11 @@ package controller
 import (
 	"NewAPI-Gateway/model"
 	"NewAPI-Gateway/service"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,19 +16,24 @@ import (
 func Relay(c *gin.Context) {
 	aggToken := c.MustGet("agg_token").(*model.AggregatedToken)
 
-	// 1. Extract model from request body
-	modelName := extractModelFromBody(c)
-	if modelName == "" {
-		modelName = "unknown"
+	// 1. Extract and resolve model identity.
+	requestedModel := extractRequestedModel(c)
+	if requestedModel == "" {
+		requestedModel = "unknown"
 	}
-	c.Set("request_model_original", modelName)
-	c.Set("request_model", modelName)
+	canonicalModel := requestedModel
+	if resolvedCanonical, ok, err := model.ResolveCanonicalModelName(requestedModel); err == nil && ok {
+		canonicalModel = resolvedCanonical
+	}
+	c.Set("request_model_original", requestedModel)
+	c.Set("request_model_canonical", canonicalModel)
+	c.Set("request_model", canonicalModel)
 
 	// 2. Check model whitelist
-	if !aggToken.IsModelAllowed(modelName) {
+	if !aggToken.IsModelAllowed(canonicalModel) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
-				"message": "model not allowed: " + modelName,
+				"message": "model not allowed: " + requestedModel,
 				"type":    "permission_error",
 				"code":    "model_not_allowed",
 			},
@@ -35,11 +42,16 @@ func Relay(c *gin.Context) {
 	}
 
 	// 3. Build retry plan: retry all routes within one priority first, then downgrade.
-	plan, err := model.BuildRouteAttemptsByPriority(modelName)
+	planModel := canonicalModel
+	plan, err := model.BuildRouteAttemptsByPriority(planModel)
+	if err != nil && !strings.EqualFold(planModel, requestedModel) {
+		planModel = requestedModel
+		plan, err = model.BuildRouteAttemptsByPriority(planModel)
+	}
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error": gin.H{
-				"message": "no available provider for model: " + modelName,
+				"message": "no available provider for model: " + requestedModel,
 				"type":    "server_error",
 				"code":    "service_unavailable",
 			},
@@ -77,9 +89,9 @@ func Relay(c *gin.Context) {
 		}
 	}
 
-	message := "no available provider for model: " + modelName
+	message := "no available provider for model: " + requestedModel
 	if lastErr != nil && lastErr.Message != "" {
-		message = "all providers failed for model: " + modelName
+		message = "all providers failed for model: " + requestedModel
 	}
 	c.JSON(http.StatusServiceUnavailable, gin.H{
 		"error": gin.H{
@@ -92,6 +104,7 @@ func Relay(c *gin.Context) {
 
 // ListModels returns all available models across all providers
 func ListModels(c *gin.Context) {
+	aggToken := c.MustGet("agg_token").(*model.AggregatedToken)
 	models, err := model.GetDistinctModels()
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -103,6 +116,9 @@ func ListModels(c *gin.Context) {
 
 	var modelList []gin.H
 	for _, m := range models {
+		if !aggToken.IsModelAllowed(m) {
+			continue
+		}
 		modelList = append(modelList, gin.H{
 			"id":       m,
 			"object":   "model",
@@ -116,10 +132,38 @@ func ListModels(c *gin.Context) {
 }
 
 func GetModel(c *gin.Context) {
-	modelName := c.Param("model")
-	models, _ := model.GetDistinctModels()
-	for _, m := range models {
-		if m == modelName {
+	aggToken := c.MustGet("agg_token").(*model.AggregatedToken)
+	modelName := strings.TrimSpace(c.Param("model"))
+	if modelName == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": gin.H{
+				"message": "model not found: " + modelName,
+				"type":    "invalid_request_error",
+			},
+		})
+		return
+	}
+
+	resolvedModel := modelName
+	if canonical, ok, err := model.ResolveCanonicalModelName(modelName); err == nil && ok {
+		resolvedModel = canonical
+	}
+	if !aggToken.IsModelAllowed(resolvedModel) {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": gin.H{
+				"message": "model not found: " + modelName,
+				"type":    "invalid_request_error",
+			},
+		})
+		return
+	}
+
+	models, err := model.GetDistinctModels()
+	if err == nil {
+		for _, m := range models {
+			if m != resolvedModel {
+				continue
+			}
 			c.JSON(http.StatusOK, gin.H{
 				"id":       m,
 				"object":   "model",
@@ -156,6 +200,14 @@ func BillingUsage(c *gin.Context) {
 	})
 }
 
+func extractRequestedModel(c *gin.Context) string {
+	modelName := extractModelFromBody(c)
+	if modelName != "" {
+		return modelName
+	}
+	return extractModelFromGeminiPath(c.Request.URL.Path)
+}
+
 func extractModelFromBody(c *gin.Context) string {
 	// Read body and restore it
 	bodyBytes, err := io.ReadAll(c.Request.Body)
@@ -163,9 +215,7 @@ func extractModelFromBody(c *gin.Context) string {
 		return ""
 	}
 	// Restore body for later use by proxy
-	c.Request.Body = io.NopCloser(io.NopCloser(
-		&readCloserWrapper{data: bodyBytes, pos: 0},
-	))
+	c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	var body struct {
 		Model string `json:"model"`
@@ -176,20 +226,33 @@ func extractModelFromBody(c *gin.Context) string {
 	return body.Model
 }
 
-type readCloserWrapper struct {
-	data []byte
-	pos  int
-}
-
-func (r *readCloserWrapper) Read(p []byte) (n int, err error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
+func extractModelFromGeminiPath(path string) string {
+	rawPath := strings.TrimSpace(path)
+	if rawPath == "" {
+		return ""
 	}
-	n = copy(p, r.data[r.pos:])
-	r.pos += n
-	return n, nil
-}
 
-func (r *readCloserWrapper) Close() error {
-	return nil
+	const prefix = "/v1beta/models/"
+	if !strings.Contains(rawPath, prefix) {
+		return ""
+	}
+	idx := strings.Index(rawPath, prefix)
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(rawPath[idx+len(prefix):])
+	if rest == "" {
+		return ""
+	}
+	if colonIdx := strings.Index(rest, ":"); colonIdx >= 0 {
+		rest = rest[:colonIdx]
+	}
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		return ""
+	}
+	if slashIdx := strings.LastIndex(rest, "/"); slashIdx >= 0 && slashIdx < len(rest)-1 {
+		rest = rest[slashIdx+1:]
+	}
+	return strings.TrimSpace(rest)
 }
