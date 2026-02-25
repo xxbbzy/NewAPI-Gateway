@@ -1,9 +1,9 @@
 package controller
 
 import (
-	"fmt"
 	"NewAPI-Gateway/common"
 	"NewAPI-Gateway/model"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"path/filepath"
@@ -13,11 +13,8 @@ import (
 )
 
 func GetAllFiles(c *gin.Context) {
-	p, _ := strconv.Atoi(c.Query("p"))
-	if p < 0 {
-		p = 0
-	}
-	files, err := model.GetAllFiles(p*common.ItemsPerPage, common.ItemsPerPage)
+	pagination := parsePaginationParams(c)
+	files, total, err := model.QueryFiles(pagination.Offset, pagination.PageSize)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -28,7 +25,7 @@ func GetAllFiles(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    files,
+		"data":    buildPaginatedData(files, pagination, total),
 	})
 	return
 }

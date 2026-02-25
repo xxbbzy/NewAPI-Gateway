@@ -39,6 +39,7 @@
 | 专题 | [model-alias-manual-mapping.md](./model-alias-manual-mapping.md) | 供应商模型别名手动映射 |
 | 专题 | [provider-form-guide.md](./provider-form-guide.md) | 添加供应商字段获取说明（Access Token / Upstream User ID） |
 | 专题 | [provider-form-example.md](./provider-form-example.md) | 添加供应商与创建上游令牌填写示例 |
+| 专题 | [pagination-migration.md](./pagination-migration.md) | 管理列表分页协议迁移与兼容策略 |
 | 专题 | [FAQ.md](./FAQ.md) | 高频问题与排障捷径 |
 | 合规 | [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) | 第三方许可声明 |
 
@@ -47,6 +48,7 @@
 | 变更类型 | 必须同步文档 |
 | --- | --- |
 | 新增/修改 Relay 或管理接口 | [API_REFERENCE.md](./API_REFERENCE.md), [README.md](../README.md) |
+| 管理列表分页协议变更 | [API_REFERENCE.md](./API_REFERENCE.md), [pagination-migration.md](./pagination-migration.md), [DEVELOPMENT.md](./DEVELOPMENT.md) |
 | 路由算法、代理行为、同步流程变更 | [ARCHITECTURE.md](./ARCHITECTURE.md), [OPERATIONS.md](./OPERATIONS.md) |
 | 环境变量、启动参数、默认值变更 | [CONFIGURATION.md](./CONFIGURATION.md), [DEPLOYMENT.md](./DEPLOYMENT.md) |
 | 数据表/字段语义变更 | [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md), [ARCHITECTURE.md](./ARCHITECTURE.md) |

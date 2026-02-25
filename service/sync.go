@@ -76,15 +76,30 @@ func syncPricing(client *UpstreamClient, provider *model.Provider) error {
 func syncTokens(client *UpstreamClient, provider *model.Provider) error {
 	// Fetch all tokens (paginate)
 	var allTokens []UpstreamToken
-	page := 1
+	seenTokenIDs := make(map[int]struct{})
+	page := 0
 	pageSize := 100
 	for {
-		tokens, err := client.GetTokens(page, pageSize)
+		tokenPage, err := client.GetTokens(page, pageSize)
 		if err != nil {
 			return err
 		}
-		allTokens = append(allTokens, tokens...)
-		if len(tokens) < pageSize {
+		tokens := tokenPage.Items
+		for _, t := range tokens {
+			if _, exists := seenTokenIDs[t.Id]; exists {
+				continue
+			}
+			seenTokenIDs[t.Id] = struct{}{}
+			allTokens = append(allTokens, t)
+		}
+		if len(tokens) == 0 {
+			break
+		}
+		if tokenPage.Total > 0 {
+			if len(allTokens) >= tokenPage.Total {
+				break
+			}
+		} else if len(tokens) < tokenPage.PageSize {
 			break
 		}
 		page++

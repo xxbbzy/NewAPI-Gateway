@@ -1,8 +1,8 @@
 package model
 
 import (
-	"errors"
 	"NewAPI-Gateway/common"
+	"errors"
 	"strings"
 )
 
@@ -31,6 +31,23 @@ func GetMaxUserId() int {
 func GetAllUsers(startIdx int, num int) (users []*User, err error) {
 	err = DB.Order("id desc").Limit(num).Offset(startIdx).Select([]string{"id", "username", "display_name", "role", "status", "email"}).Find(&users).Error
 	return users, err
+}
+
+func QueryUsers(startIdx int, num int) (users []*User, total int64, err error) {
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if num <= 0 {
+		num = common.ItemsPerPage
+	}
+
+	if err = DB.Model(&User{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	err = DB.Order("id desc").Limit(num).Offset(startIdx).
+		Select([]string{"id", "username", "display_name", "role", "status", "email"}).
+		Find(&users).Error
+	return users, total, err
 }
 
 func SearchUsers(keyword string) (users []*User, err error) {

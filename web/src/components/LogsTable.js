@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search, RefreshCw, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
-import { API, showError } from '../helpers';
+import { API, normalizePaginatedData, showError } from '../helpers';
 import { ITEMS_PER_PAGE } from '../constants';
 import Card from './ui/Card';
 import Badge from './ui/Badge';
@@ -67,7 +67,8 @@ const buildSummaryFromLogs = (logs, isErrorLog) => {
 
 const LogsTable = ({ selfOnly }) => {
   const [logs, setLogs] = useState([]);
-  const [total, setTotal] = useState(null);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [expandedRowId, setExpandedRowId] = useState(null);
@@ -106,41 +107,36 @@ const LogsTable = ({ selfOnly }) => {
       const res = await API.get(`${endpoint}?${params.toString()}`);
       const { success, data, message } = res.data;
       if (success) {
-        if (Array.isArray(data)) {
-          setLogs(data);
-          setTotal(null);
-          setProviderOptions(
-            Array.from(new Set(data.map((log) => log.provider_name).filter(Boolean))).sort((a, b) =>
-              a.localeCompare(b, 'zh-Hans-CN')
-            )
-          );
-          setServerSummary(null);
+        const normalized = normalizePaginatedData(data, { p: page, page_size: ITEMS_PER_PAGE });
+        const pageItems = Array.isArray(normalized.items) ? normalized.items : [];
+        setLogs(pageItems);
+        setTotal(Number(normalized.total || 0));
+        setHasMore(Boolean(normalized.has_more));
+
+        const providers = Array.isArray(normalized.providers)
+          ? normalized.providers
+          : Array.from(new Set(pageItems.map((log) => log.provider_name).filter(Boolean)));
+        setProviderOptions(
+          providers
+            .filter(Boolean)
+            .map((item) => String(item))
+            .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+        );
+
+        const nextSummary = normalized.summary;
+        if (nextSummary && typeof nextSummary === 'object') {
+          setServerSummary({
+            total: Number(nextSummary.total || 0),
+            successCount: Number(nextSummary.success_count || 0),
+            errorCount: Number(nextSummary.error_count || 0),
+            inputTokens: Number(nextSummary.input_tokens || 0),
+            outputTokens: Number(nextSummary.output_tokens || 0),
+            cacheTokens: Number(nextSummary.cache_tokens || 0),
+            totalCost: Number(nextSummary.total_cost || 0),
+            avgLatency: Number(nextSummary.avg_latency || 0)
+          });
         } else {
-          const pageItems = Array.isArray(data?.items) ? data.items : [];
-          setLogs(pageItems);
-          setTotal(Number.isFinite(Number(data?.total)) ? Number(data.total) : null);
-          const providers = Array.isArray(data?.providers) ? data.providers : [];
-          setProviderOptions(
-            providers
-              .filter(Boolean)
-              .map((item) => String(item))
-              .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
-          );
-          const nextSummary = data?.summary;
-          if (nextSummary && typeof nextSummary === 'object') {
-            setServerSummary({
-              total: Number(nextSummary.total || 0),
-              successCount: Number(nextSummary.success_count || 0),
-              errorCount: Number(nextSummary.error_count || 0),
-              inputTokens: Number(nextSummary.input_tokens || 0),
-              outputTokens: Number(nextSummary.output_tokens || 0),
-              cacheTokens: Number(nextSummary.cache_tokens || 0),
-              totalCost: Number(nextSummary.total_cost || 0),
-              avgLatency: Number(nextSummary.avg_latency || 0)
-            });
-          } else {
-            setServerSummary(null);
-          }
+          setServerSummary(null);
         }
       } else {
         showError(message);
@@ -229,7 +225,7 @@ const LogsTable = ({ selfOnly }) => {
     }
   };
 
-  const canGoNext = total === null ? logs.length === ITEMS_PER_PAGE : (page + 1) * ITEMS_PER_PAGE < total;
+  const canGoNext = hasMore;
 
   return (
     <Card padding='0'>

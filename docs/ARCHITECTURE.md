@@ -75,6 +75,8 @@
 
 实现位置：`model/model_route.go`（`BuildRouteAttemptsByPriority` / `GetModelRouteOverview`）。
 
+在候选筛选前，系统先通过统一模型目录（Model Catalog）解析请求模型，将 canonical/alias/上游目标名收敛为同一模型语义。
+
 1. 汇总候选路由（同一候选池）：
    - 精确模型名匹配；
    - 供应商级手动映射（`providers.model_alias_mapping`）；
@@ -105,7 +107,7 @@
 
 - 认证替换：客户端 `ag-` -> 上游 `sk-`。
 - Header 清理：删除 `X-Forwarded-*`、`Via`、`Forwarded`、`X-Real-IP`。
-- 请求体改写：当命中别名路由时改写 `model` 字段为上游实际模型名。
+- 请求体改写：Relay 会将请求模型解析为 canonical 语义，再按路由命中的上游目标模型改写 `model` 字段。
 - 支持 SSE：实时转发流式响应并记录首 token 延迟。
 
 ## 关键数据表

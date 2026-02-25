@@ -26,11 +26,8 @@ var syncProviderAfterTokenCreate = func(provider *model.Provider) {
 }
 
 func GetProviders(c *gin.Context) {
-	p, _ := strconv.Atoi(c.Query("p"))
-	if p < 0 {
-		p = 0
-	}
-	providers, err := model.GetAllProviders(p*common.ItemsPerPage, common.ItemsPerPage)
+	pagination := parsePaginationParams(c)
+	providers, total, err := model.QueryProviders(pagination.Offset, pagination.PageSize)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
@@ -39,7 +36,7 @@ func GetProviders(c *gin.Context) {
 	for _, provider := range providers {
 		provider.CleanForResponse()
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": providers})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": buildPaginatedData(providers, pagination, total)})
 }
 
 func GetProviderDetail(c *gin.Context) {

@@ -1,39 +1,29 @@
 package controller
 
 import (
-	"NewAPI-Gateway/common"
 	"NewAPI-Gateway/model"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-func parseLogListQuery(c *gin.Context) (int, int, model.UsageLogQuery) {
-	p, _ := strconv.Atoi(c.Query("p"))
-	if p < 0 {
-		p = 0
-	}
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", strconv.Itoa(common.ItemsPerPage)))
-	if pageSize <= 0 {
-		pageSize = common.ItemsPerPage
-	}
-
+func parseLogListQuery(c *gin.Context) (PaginationParams, model.UsageLogQuery) {
+	pagination := parsePaginationParams(c)
 	query := model.UsageLogQuery{
-		Offset:       p * pageSize,
-		Limit:        pageSize,
+		Offset:       pagination.Offset,
+		Limit:        pagination.PageSize,
 		Keyword:      strings.TrimSpace(c.Query("keyword")),
 		ProviderName: strings.TrimSpace(c.Query("provider")),
 		Status:       strings.TrimSpace(c.DefaultQuery("status", "all")),
 		ViewTab:      strings.TrimSpace(c.DefaultQuery("view", "all")),
 	}
-	return p, pageSize, query
+	return pagination, query
 }
 
 func GetSelfLogs(c *gin.Context) {
 	userId := c.GetInt("id")
-	p, pageSize, query := parseLogListQuery(c)
+	pagination, query := parseLogListQuery(c)
 	query.UserID = &userId
 
 	logs, total, err := model.QueryUsageLogs(query)
@@ -51,22 +41,18 @@ func GetSelfLogs(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	data := buildPaginatedData(logs, pagination, total)
+	data["providers"] = providers
+	data["summary"] = summary
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data": gin.H{
-			"items":     logs,
-			"total":     total,
-			"page":      p,
-			"page_size": pageSize,
-			"providers": providers,
-			"summary":   summary,
-		},
+		"data":    data,
 	})
 }
 
 func GetAllLogs(c *gin.Context) {
-	p, pageSize, query := parseLogListQuery(c)
+	pagination, query := parseLogListQuery(c)
 	logs, total, err := model.QueryUsageLogs(query)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
@@ -82,17 +68,13 @@ func GetAllLogs(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	data := buildPaginatedData(logs, pagination, total)
+	data["providers"] = providers
+	data["summary"] = summary
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data": gin.H{
-			"items":     logs,
-			"total":     total,
-			"page":      p,
-			"page_size": pageSize,
-			"providers": providers,
-			"summary":   summary,
-		},
+		"data":    data,
 	})
 }
 

@@ -972,10 +972,14 @@ func GetAllModelRoutes(modelName string, startIdx int, num int) ([]*ModelRoute, 
 
 // GetDistinctModels returns all unique model names available in routes
 func GetDistinctModels() ([]string, error) {
-	var models []string
-	err := DB.Model(&ModelRoute{}).Where("enabled = ?", true).
-		Distinct("model_name").Pluck("model_name", &models).Error
-	return models, err
+	snapshot, err := getRoutingStaticSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	if snapshot == nil {
+		return []string{}, nil
+	}
+	return snapshot.modelCatalog.canonicalModels(), nil
 }
 
 func (r *ModelRoute) Update() error {

@@ -74,6 +74,13 @@ type UpstreamToken struct {
 	ModelLimits        string `json:"model_limits"`
 }
 
+type UpstreamTokenPage struct {
+	Page     int             `json:"page"`
+	PageSize int             `json:"page_size"`
+	Total    int             `json:"total"`
+	Items    []UpstreamToken `json:"items"`
+}
+
 // UpstreamUserSelf mirrors partial user/self response
 type UpstreamUserSelf struct {
 	Id      int   `json:"id"`
@@ -195,7 +202,7 @@ func (c *UpstreamClient) GetPricing() (*UpstreamPricingPayload, error) {
 }
 
 // GetTokens fetches /api/token/ from the upstream
-func (c *UpstreamClient) GetTokens(page int, pageSize int) ([]UpstreamToken, error) {
+func (c *UpstreamClient) GetTokens(page int, pageSize int) (*UpstreamTokenPage, error) {
 	path := fmt.Sprintf("/api/token/?p=%d&page_size=%d", page, pageSize)
 	body, err := c.doRequest("GET", path)
 	if err != nil {
@@ -205,15 +212,27 @@ func (c *UpstreamClient) GetTokens(page int, pageSize int) ([]UpstreamToken, err
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, err
 	}
-	// Upstream returns a paginated object: {page, page_size, total, items: [...tokens]}
-	var pageInfo struct {
-		Items []UpstreamToken `json:"items"`
-		Total int             `json:"total"`
+	if !resp.Success {
+		return nil, fmt.Errorf("upstream token list failed: %s", resp.Message)
 	}
+	// Upstream returns a paginated object: {page, page_size, total, items: [...tokens]}
+	var pageInfo UpstreamTokenPage
 	if err := json.Unmarshal(resp.Data, &pageInfo); err != nil {
 		return nil, fmt.Errorf("failed to parse paginated token response: %w", err)
 	}
-	return pageInfo.Items, nil
+	if pageInfo.PageSize <= 0 {
+		pageInfo.PageSize = pageSize
+	}
+	if pageInfo.Page < 0 {
+		pageInfo.Page = page
+	}
+	if pageInfo.Total < 0 {
+		pageInfo.Total = 0
+	}
+	if pageInfo.Items == nil {
+		pageInfo.Items = make([]UpstreamToken, 0)
+	}
+	return &pageInfo, nil
 }
 
 // CreateUpstreamToken calls upstream POST /api/token/ to create a new token

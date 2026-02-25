@@ -39,7 +39,8 @@
 
 ## 8. 如何查看可用模型列表？
 
-调用 `GET /v1/models`，返回当前启用路由中的去重模型。
+调用 `GET /v1/models`，返回当前可调用的 canonical 模型列表（会按聚合 token 的 `model_limits` 过滤）。
+`GET /v1/models/:model` 支持 canonical 或 alias 查询。
 
 ## 9. 如何让不同供应商按比例分流？
 

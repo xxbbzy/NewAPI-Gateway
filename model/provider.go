@@ -39,6 +39,25 @@ func GetAllProviders(startIdx int, num int) ([]*Provider, error) {
 	return providers, err
 }
 
+func QueryProviders(startIdx int, num int) ([]*Provider, int64, error) {
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if num <= 0 {
+		num = common.ItemsPerPage
+	}
+
+	base := DB.Model(&Provider{})
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var providers []*Provider
+	err := DB.Order("id desc").Limit(num).Offset(startIdx).Find(&providers).Error
+	return providers, total, err
+}
+
 func GetProviderById(id int) (*Provider, error) {
 	if id == 0 {
 		return nil, errors.New("id 为空")

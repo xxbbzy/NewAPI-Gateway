@@ -54,6 +54,26 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 }
 ```
 
+### 管理列表分页约定（统一协议）
+
+适用于返回“列表”的管理接口（例如 `/api/provider/`、`/api/user/`、`/api/agg-token/`、`/api/file/`、`/api/log/*`）：
+
+- 请求参数：
+  - `p`：页码（从 `0` 起）
+  - `page_size`：每页条数（默认 `10`，超出服务端上限会被自动截断）
+- 响应 `data` 结构：
+
+```json
+{
+  "items": [],
+  "p": 0,
+  "page_size": 10,
+  "total": 0,
+  "total_pages": 0,
+  "has_more": false
+}
+```
+
 ## Relay API（`/v1*`）
 
 | Method | Path | 说明 |
@@ -70,8 +90,8 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 | POST | `/v1/responses` | OpenAI Responses |
 | POST | `/v1/messages` | Anthropic 兼容 |
 | POST | `/v1beta/models/*path` | Gemini 兼容 |
-| GET | `/v1/models` | 获取可用模型 |
-| GET | `/v1/models/:model` | 获取模型详情 |
+| GET | `/v1/models` | 获取可用 canonical 模型（按聚合 token 权限过滤） |
+| GET | `/v1/models/:model` | 按 canonical/alias 获取模型详情 |
 | GET | `/dashboard/billing/subscription` | 兼容返回（模拟） |
 | GET | `/dashboard/billing/usage` | 兼容返回（模拟） |
 
@@ -108,7 +128,7 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| GET | `/api/user/` | 用户列表 |
+| GET | `/api/user/` | 用户列表（支持 `?p=&page_size=`） |
 | GET | `/api/user/search` | 用户搜索 |
 | GET | `/api/user/:id` | 用户详情 |
 | POST | `/api/user/` | 创建用户 |
@@ -152,7 +172,7 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| GET | `/api/provider/` | 供应商列表 |
+| GET | `/api/provider/` | 供应商列表（支持 `?p=&page_size=`） |
 | GET | `/api/provider/export` | 导出供应商 |
 | POST | `/api/provider/import` | 导入供应商 |
 | GET | `/api/provider/checkin/summary` | 获取签到任务汇总（支持 `?limit=`） |
@@ -187,7 +207,7 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| GET | `/api/agg-token/` | 当前用户聚合 token 列表 |
+| GET | `/api/agg-token/` | 当前用户聚合 token 列表（支持 `?p=&page_size=`） |
 | POST | `/api/agg-token/` | 创建聚合 token |
 | PUT | `/api/agg-token/` | 更新聚合 token |
 | DELETE | `/api/agg-token/:id` | 删除聚合 token |
@@ -200,10 +220,17 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 | --- | --- | --- |
 | GET | `/api/route/` | 路由列表（支持 `?model=`） |
 | GET | `/api/route/overview` | 路由总览（支持 `model/provider_id/enabled_only`） |
-| GET | `/api/route/models` | 已接入模型列表 |
+| GET | `/api/route/models` | 已接入 canonical 模型列表 |
 | PUT | `/api/route/:id` | 更新单条路由（priority/weight/enabled） |
 | POST | `/api/route/batch-update` | 批量更新路由 |
 | POST | `/api/route/rebuild` | 触发全量路由重建 |
+
+补充说明：
+
+- 模型查询与请求使用统一模型目录语义：
+  - 用户可使用 canonical、归一化别名、或供应商手动映射别名请求；
+  - Relay 会先解析为 canonical 语义，再选择路由并改写为上游目标模型；
+  - `model_limits` 校验按 canonical/alias/target 等价匹配。
 
 ## 日志与统计 API
 
@@ -222,6 +249,11 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 - `provider`：供应商名称精确筛选
 - `status`：`all` / `success` / `error`
 - `view`：`all` / `error`
+
+日志查询同样使用“管理列表分页约定”响应字段（`items/p/page_size/total/total_pages/has_more`），并额外返回：
+
+- `providers`：当前筛选条件下的供应商选项
+- `summary`：当前筛选条件下的聚合统计
 
 ### 仪表盘
 
