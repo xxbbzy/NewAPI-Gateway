@@ -173,6 +173,20 @@ func (p *Provider) CleanForResponse() {
 	p.AccessToken = ""
 }
 
+// FindProviderByBaseURLAndUserID finds a provider by base_url + user_id combination.
+// Returns nil, nil if not found.
+func FindProviderByBaseURLAndUserID(baseURL string, userID int) (*Provider, error) {
+	var provider Provider
+	err := DB.Where("base_url = ? AND user_id = ?", baseURL, userID).First(&provider).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &provider, nil
+}
+
 func CountProviders() int64 {
 	var count int64
 	DB.Model(&Provider{}).Count(&count)

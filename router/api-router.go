@@ -83,6 +83,26 @@ func SetApiRouter(router *gin.Engine) {
 			providerRoute.DELETE("/token/:token_id", controller.DeleteProviderToken)
 		}
 
+		// === Plugin Provider Management (Admin Token Only) ===
+		pluginProviderRoute := apiRouter.Group("/plugin/provider")
+		pluginProviderRoute.Use(middleware.AdminAuth(), middleware.TokenOnlyAuth())
+		{
+			pluginProviderRoute.GET("/", controller.GetProviders)
+			pluginProviderRoute.POST("/", controller.CreateProvider)
+			pluginProviderRoute.PUT("/", controller.UpdateProvider)
+			pluginProviderRoute.GET("/export", controller.ExportProviders)
+			pluginProviderRoute.POST("/import", controller.ImportProviders)
+			pluginProviderRoute.GET("/:id", controller.GetProviderDetail)
+			pluginProviderRoute.POST("/:id/sync", controller.SyncProviderHandler)
+			pluginProviderRoute.GET("/:id/tokens", controller.GetProviderTokens)
+			pluginProviderRoute.GET("/:id/pricing", controller.GetProviderPricing)
+			pluginProviderRoute.GET("/:id/model-alias-mapping", controller.GetProviderModelAliasMapping)
+			pluginProviderRoute.PUT("/:id/model-alias-mapping", controller.UpdateProviderModelAliasMapping)
+			pluginProviderRoute.POST("/:id/tokens", controller.CreateProviderToken)
+			pluginProviderRoute.PUT("/token/:token_id", controller.UpdateProviderToken)
+			pluginProviderRoute.DELETE("/token/:token_id", controller.DeleteProviderToken)
+		}
+
 		// === Aggregated Token (User) ===
 		aggTokenRoute := apiRouter.Group("/agg-token")
 		aggTokenRoute.Use(middleware.UserAuth(), middleware.NoTokenAuth())
