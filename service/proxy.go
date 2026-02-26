@@ -195,21 +195,7 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 			if hasData && firstTokenMs == 0 {
 				firstTokenMs = int(time.Since(startTime).Milliseconds())
 			}
-			if currentUsage.PromptTokens > streamUsage.PromptTokens {
-				streamUsage.PromptTokens = currentUsage.PromptTokens
-			}
-			if currentUsage.CompletionTokens > streamUsage.CompletionTokens {
-				streamUsage.CompletionTokens = currentUsage.CompletionTokens
-			}
-			if currentUsage.CacheTokens > streamUsage.CacheTokens {
-				streamUsage.CacheTokens = currentUsage.CacheTokens
-			}
-			if currentUsage.CostUSD > streamUsage.CostUSD {
-				streamUsage.CostUSD = currentUsage.CostUSD
-			}
-			if currentUsage.ModelName != "" {
-				streamUsage.ModelName = currentUsage.ModelName
-			}
+			streamUsage = mergeUsageMetrics(streamUsage, currentUsage)
 			if ok {
 				flusher.Flush()
 			}
@@ -267,6 +253,42 @@ type usageMetrics struct {
 	CacheCreation5mTokens int
 	CacheCreation1hTokens int
 	CostUSD               float64
+	UsageSource           string
+	UsageParser           string
+}
+
+func mergeUsageMetrics(base usageMetrics, current usageMetrics) usageMetrics {
+	if current.PromptTokens > base.PromptTokens {
+		base.PromptTokens = current.PromptTokens
+	}
+	if current.CompletionTokens > base.CompletionTokens {
+		base.CompletionTokens = current.CompletionTokens
+	}
+	if current.CacheTokens > base.CacheTokens {
+		base.CacheTokens = current.CacheTokens
+	}
+	if current.CacheCreationTokens > base.CacheCreationTokens {
+		base.CacheCreationTokens = current.CacheCreationTokens
+	}
+	if current.CacheCreation5mTokens > base.CacheCreation5mTokens {
+		base.CacheCreation5mTokens = current.CacheCreation5mTokens
+	}
+	if current.CacheCreation1hTokens > base.CacheCreation1hTokens {
+		base.CacheCreation1hTokens = current.CacheCreation1hTokens
+	}
+	if current.CostUSD > base.CostUSD {
+		base.CostUSD = current.CostUSD
+	}
+	if current.ModelName != "" {
+		base.ModelName = current.ModelName
+	}
+	if current.UsageSource == model.UsageSourceExact {
+		base.UsageSource = model.UsageSourceExact
+	}
+	if current.UsageParser != "" && current.UsageParser != "none" {
+		base.UsageParser = current.UsageParser
+	}
+	return base
 }
 
 func rewriteRequestModel(body []byte, targetModel string) []byte {
@@ -321,14 +343,27 @@ func logUsage(aggToken *model.AggregatedToken, provider *model.Provider, token *
 	if usage.ModelName == "" {
 		usage.ModelName = getContextModelName(c)
 	}
+	if strings.TrimSpace(usage.UsageSource) == "" {
+		usage.UsageSource = model.UsageSourceMissing
+	}
+	if strings.TrimSpace(usage.UsageParser) == "" {
+		usage.UsageParser = "none"
+	}
 	if usage.CostUSD <= 0 {
-		usage.CostUSD = estimateUsageCostUSD(
+		estimated := estimateUsageCostUSD(
 			provider.Id,
 			usage.ModelName,
 			usage.PromptTokens,
 			usage.CompletionTokens,
 		)
+		usage.CostUSD = estimated
+		if estimated > 0 && usage.UsageSource == model.UsageSourceMissing {
+			usage.UsageSource = model.UsageSourceEstimated
+			usage.UsageParser = "cost-estimator"
+		}
 	}
+	relayRequestId := getRelayRequestID(c, requestId)
+	attemptIndex := getRelayAttemptIndex(c)
 
 	log := &model.UsageLog{
 		UserId:                aggToken.UserId,
@@ -351,12 +386,44 @@ func logUsage(aggToken *model.AggregatedToken, provider *model.Provider, token *
 		ErrorMessage:          errorMsg,
 		ClientIp:              c.ClientIP(),
 		RequestId:             requestId,
+		RelayRequestId:        relayRequestId,
+		AttemptIndex:          attemptIndex,
+		UsageSource:           usage.UsageSource,
+		UsageParser:           usage.UsageParser,
 	}
 	go func() {
 		if err := log.Insert(); err != nil {
 			common.SysLog(fmt.Sprintf("failed to insert usage log: %v", err))
 		}
 	}()
+}
+
+func getRelayRequestID(c *gin.Context, requestId string) string {
+	relayRequestID := strings.TrimSpace(c.GetString("relay_request_id"))
+	if relayRequestID == "" {
+		return "legacy-" + requestId
+	}
+	return relayRequestID
+}
+
+func getRelayAttemptIndex(c *gin.Context) int {
+	if raw, ok := c.Get("relay_attempt_index"); ok {
+		switch v := raw.(type) {
+		case int:
+			if v > 0 {
+				return v
+			}
+		case int64:
+			if v > 0 {
+				return int(v)
+			}
+		case float64:
+			if v > 0 {
+				return int(v)
+			}
+		}
+	}
+	return 1
 }
 
 func isAnthropicPath(path string) bool {
@@ -500,59 +567,326 @@ func extractUsageAndModelFromSSELine(line string) (usageMetrics, bool) {
 	return extractUsageAndModelFromJSON([]byte(payload)), true
 }
 
+type usageExtractor struct {
+	parser  string
+	extract func(payload map[string]interface{}) (map[string]interface{}, string, bool)
+}
+
+var usageExtractors = []usageExtractor{
+	{parser: "usage-map", extract: extractTopLevelUsageMap},
+	{parser: "message-usage-map", extract: extractMessageUsageMap},
+	{parser: "data-usage-map", extract: extractDataUsageMap},
+	{parser: "response-usage-map", extract: extractResponseUsageMap},
+	{parser: "result-usage-map", extract: extractResultUsageMap},
+	{parser: "choices-usage-map", extract: extractChoicesUsageMap},
+	{parser: "token-usage-map", extract: extractTopLevelTokenUsageMap},
+	{parser: "top-level-usage-fields", extract: extractTopLevelUsageFields},
+	{parser: "recursive-usage-map", extract: extractRecursiveUsageMap},
+}
+
 func extractUsageAndModelFromJSON(body []byte) usageMetrics {
 	if len(body) == 0 {
-		return usageMetrics{}
+		return usageMetrics{UsageSource: model.UsageSourceMissing, UsageParser: "none"}
 	}
 	var payload map[string]interface{}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return usageMetrics{}
+		return usageMetrics{UsageSource: model.UsageSourceMissing, UsageParser: "none"}
 	}
 
 	out := usageMetrics{}
 	if modelName := getStringValue(payload["model"]); modelName != "" {
 		out.ModelName = modelName
 	}
+	out.UsageSource = model.UsageSourceMissing
+	out.UsageParser = "none"
 
-	usage, modelName := extractUsageMap(payload)
-	if modelName != "" && out.ModelName == "" {
-		out.ModelName = modelName
+	for _, extractor := range usageExtractors {
+		usage, modelName, ok := extractor.extract(payload)
+		if !ok {
+			continue
+		}
+		parsed, hasUsage := buildUsageMetricsFromMap(usage)
+		if !hasUsage {
+			continue
+		}
+		if parsed.ModelName == "" && modelName != "" {
+			parsed.ModelName = modelName
+		}
+		if parsed.ModelName == "" {
+			parsed.ModelName = out.ModelName
+		}
+		parsed.UsageSource = model.UsageSourceExact
+		parsed.UsageParser = extractor.parser
+		return parsed
 	}
-	if usage == nil {
-		return out
+	return out
+}
+
+func buildUsageMetricsFromMap(usage map[string]interface{}) (usageMetrics, bool) {
+	if usage == nil || !hasAnyUsageSignal(usage) {
+		return usageMetrics{}, false
+	}
+	out := usageMetrics{}
+
+	if value, ok := getIntByPaths(usage, []string{"prompt_tokens"}, []string{"input_tokens"}, []string{"prompt_token_count"}, []string{"input_token_count"}, []string{"inputTokenCount"}); ok {
+		out.PromptTokens = value
+	}
+	if value, ok := getIntByPaths(usage, []string{"completion_tokens"}, []string{"output_tokens"}, []string{"completion_token_count"}, []string{"output_token_count"}, []string{"outputTokenCount"}); ok {
+		out.CompletionTokens = value
+	}
+	if out.PromptTokens == 0 && out.CompletionTokens == 0 {
+		if value, ok := getIntByPaths(usage, []string{"total_tokens"}, []string{"total_token_count"}, []string{"totalTokenCount"}); ok {
+			out.PromptTokens = value
+		}
 	}
 
-	out.PromptTokens = getIntValue(usage["prompt_tokens"])
-	if out.PromptTokens == 0 {
-		out.PromptTokens = getIntValue(usage["input_tokens"])
+	if value, ok := getIntByPaths(
+		usage,
+		[]string{"cached_tokens"},
+		[]string{"prompt_tokens_details", "cached_tokens"},
+		[]string{"input_tokens_details", "cached_tokens"},
+		[]string{"prompt_cache_hit_tokens"},
+		[]string{"cache_read_input_tokens"},
+		[]string{"token_usage", "cached_tokens"},
+	); ok {
+		out.CacheTokens = value
 	}
-	out.CompletionTokens = getIntValue(usage["completion_tokens"])
-	if out.CompletionTokens == 0 {
-		out.CompletionTokens = getIntValue(usage["output_tokens"])
-	}
-	out.CacheTokens = getIntValue(usage["cached_tokens"])
-	out.CacheTokens = maxInt(out.CacheTokens, getIntFromMap(usage, "prompt_tokens_details", "cached_tokens"))
-	out.CacheTokens = maxInt(out.CacheTokens, getIntFromMap(usage, "input_tokens_details", "cached_tokens"))
-	out.CacheTokens = maxInt(out.CacheTokens, getIntValue(usage["prompt_cache_hit_tokens"]))
-	out.CacheTokens = maxInt(out.CacheTokens, getIntValue(usage["cache_read_input_tokens"]))
 
-	out.CacheCreationTokens = getIntValue(usage["cache_creation_tokens"])
-	out.CacheCreationTokens = maxInt(out.CacheCreationTokens, getIntFromMap(usage, "prompt_tokens_details", "cached_creation_tokens"))
-	out.CacheCreationTokens = maxInt(out.CacheCreationTokens, getIntValue(usage["cache_creation_input_tokens"]))
-	out.CacheCreation5mTokens = getIntValue(usage["cache_creation_5m_tokens"])
-	out.CacheCreation5mTokens = maxInt(out.CacheCreation5mTokens, getIntValue(usage["claude_cache_creation_5_m_tokens"]))
-	out.CacheCreation5mTokens = maxInt(out.CacheCreation5mTokens, getIntFromMap(usage, "cache_creation", "ephemeral_5m_input_tokens"))
-	out.CacheCreation1hTokens = getIntValue(usage["cache_creation_1h_tokens"])
-	out.CacheCreation1hTokens = maxInt(out.CacheCreation1hTokens, getIntValue(usage["claude_cache_creation_1_h_tokens"]))
-	out.CacheCreation1hTokens = maxInt(out.CacheCreation1hTokens, getIntFromMap(usage, "cache_creation", "ephemeral_1h_input_tokens"))
+	if value, ok := getIntByPaths(
+		usage,
+		[]string{"cache_creation_tokens"},
+		[]string{"prompt_tokens_details", "cached_creation_tokens"},
+		[]string{"cache_creation_input_tokens"},
+		[]string{"token_usage", "cache_creation_tokens"},
+	); ok {
+		out.CacheCreationTokens = value
+	}
+	if value, ok := getIntByPaths(
+		usage,
+		[]string{"cache_creation_5m_tokens"},
+		[]string{"claude_cache_creation_5_m_tokens"},
+		[]string{"cache_creation", "ephemeral_5m_input_tokens"},
+	); ok {
+		out.CacheCreation5mTokens = value
+	}
+	if value, ok := getIntByPaths(
+		usage,
+		[]string{"cache_creation_1h_tokens"},
+		[]string{"claude_cache_creation_1_h_tokens"},
+		[]string{"cache_creation", "ephemeral_1h_input_tokens"},
+	); ok {
+		out.CacheCreation1hTokens = value
+	}
 	cacheCreationSum := out.CacheCreation5mTokens + out.CacheCreation1hTokens
 	out.CacheCreationTokens = maxInt(out.CacheCreationTokens, cacheCreationSum)
 
-	out.CostUSD = getFloatValue(usage["cost"])
-	if out.CostUSD == 0 {
-		out.CostUSD = getFloatValue(usage["total_cost"])
+	if value, ok := getFloatByPaths(usage, []string{"cost"}, []string{"total_cost"}, []string{"token_usage", "cost"}); ok {
+		out.CostUSD = value
 	}
-	return out
+	return out, true
+}
+
+func hasAnyUsageSignal(usage map[string]interface{}) bool {
+	paths := [][]string{
+		{"prompt_tokens"}, {"input_tokens"}, {"prompt_token_count"}, {"input_token_count"}, {"inputTokenCount"},
+		{"completion_tokens"}, {"output_tokens"}, {"completion_token_count"}, {"output_token_count"}, {"outputTokenCount"},
+		{"total_tokens"}, {"total_token_count"}, {"totalTokenCount"},
+		{"cached_tokens"}, {"prompt_tokens_details", "cached_tokens"}, {"input_tokens_details", "cached_tokens"},
+		{"prompt_cache_hit_tokens"}, {"cache_read_input_tokens"},
+		{"cache_creation_tokens"}, {"prompt_tokens_details", "cached_creation_tokens"}, {"cache_creation_input_tokens"},
+		{"cache_creation_5m_tokens"}, {"claude_cache_creation_5_m_tokens"}, {"cache_creation", "ephemeral_5m_input_tokens"},
+		{"cache_creation_1h_tokens"}, {"claude_cache_creation_1_h_tokens"}, {"cache_creation", "ephemeral_1h_input_tokens"},
+		{"cost"}, {"total_cost"},
+	}
+	for _, path := range paths {
+		if _, ok := lookupValueByPath(usage, path); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func getIntByPaths(parent map[string]interface{}, paths ...[]string) (int, bool) {
+	for _, path := range paths {
+		if value, ok := lookupValueByPath(parent, path); ok {
+			return getIntValue(value), true
+		}
+	}
+	return 0, false
+}
+
+func getFloatByPaths(parent map[string]interface{}, paths ...[]string) (float64, bool) {
+	for _, path := range paths {
+		if value, ok := lookupValueByPath(parent, path); ok {
+			return getFloatValue(value), true
+		}
+	}
+	return 0, false
+}
+
+func lookupValueByPath(parent map[string]interface{}, path []string) (interface{}, bool) {
+	if parent == nil || len(path) == 0 {
+		return nil, false
+	}
+	var current interface{} = parent
+	for _, key := range path {
+		nextMap, ok := current.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		nextValue, ok := nextMap[key]
+		if !ok {
+			return nil, false
+		}
+		current = nextValue
+	}
+	return current, true
+}
+
+func extractTopLevelUsageMap(payload map[string]interface{}) (map[string]interface{}, string, bool) {
+	usageRaw, ok := payload["usage"]
+	if !ok {
+		return nil, "", false
+	}
+	usage, ok := usageRaw.(map[string]interface{})
+	if !ok {
+		return nil, "", false
+	}
+	return usage, getStringValue(payload["model"]), true
+}
+
+func extractMessageUsageMap(payload map[string]interface{}) (map[string]interface{}, string, bool) {
+	messageRaw, ok := payload["message"]
+	if !ok {
+		return nil, "", false
+	}
+	message, ok := messageRaw.(map[string]interface{})
+	if !ok {
+		return nil, "", false
+	}
+	usageRaw, ok := message["usage"]
+	if !ok {
+		return nil, getStringValue(message["model"]), false
+	}
+	usage, ok := usageRaw.(map[string]interface{})
+	if !ok {
+		return nil, getStringValue(message["model"]), false
+	}
+	return usage, getStringValue(message["model"]), true
+}
+
+func extractDataUsageMap(payload map[string]interface{}) (map[string]interface{}, string, bool) {
+	return extractNestedUsageMap(payload, "data")
+}
+
+func extractResponseUsageMap(payload map[string]interface{}) (map[string]interface{}, string, bool) {
+	return extractNestedUsageMap(payload, "response")
+}
+
+func extractResultUsageMap(payload map[string]interface{}) (map[string]interface{}, string, bool) {
+	return extractNestedUsageMap(payload, "result")
+}
+
+func extractNestedUsageMap(payload map[string]interface{}, key string) (map[string]interface{}, string, bool) {
+	nestedRaw, ok := payload[key]
+	if !ok {
+		return nil, "", false
+	}
+	nested, ok := nestedRaw.(map[string]interface{})
+	if !ok {
+		return nil, "", false
+	}
+	if usageRaw, ok := nested["usage"]; ok {
+		if usage, ok := usageRaw.(map[string]interface{}); ok {
+			modelName := getStringValue(nested["model"])
+			if modelName == "" {
+				modelName = getStringValue(payload["model"])
+			}
+			return usage, modelName, true
+		}
+	}
+	return nil, "", false
+}
+
+func extractChoicesUsageMap(payload map[string]interface{}) (map[string]interface{}, string, bool) {
+	choicesRaw, ok := payload["choices"]
+	if !ok {
+		return nil, "", false
+	}
+	choices, ok := choicesRaw.([]interface{})
+	if !ok {
+		return nil, "", false
+	}
+	for _, item := range choices {
+		choice, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		usageRaw, ok := choice["usage"]
+		if !ok {
+			continue
+		}
+		usage, ok := usageRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		modelName := getStringValue(choice["model"])
+		if modelName == "" {
+			modelName = getStringValue(payload["model"])
+		}
+		return usage, modelName, true
+	}
+	return nil, "", false
+}
+
+func extractTopLevelTokenUsageMap(payload map[string]interface{}) (map[string]interface{}, string, bool) {
+	raw, ok := payload["token_usage"]
+	if !ok {
+		return nil, "", false
+	}
+	usage, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, "", false
+	}
+	return usage, getStringValue(payload["model"]), true
+}
+
+func extractTopLevelUsageFields(payload map[string]interface{}) (map[string]interface{}, string, bool) {
+	if !hasAnyUsageSignal(payload) {
+		return nil, "", false
+	}
+	return payload, getStringValue(payload["model"]), true
+}
+
+func extractRecursiveUsageMap(payload map[string]interface{}) (map[string]interface{}, string, bool) {
+	if usage, ok := findUsageMapRecursive(payload, 0); ok {
+		return usage, getStringValue(payload["model"]), true
+	}
+	return nil, "", false
+}
+
+func findUsageMapRecursive(node interface{}, depth int) (map[string]interface{}, bool) {
+	if depth > 6 || node == nil {
+		return nil, false
+	}
+	switch current := node.(type) {
+	case map[string]interface{}:
+		if hasAnyUsageSignal(current) {
+			return current, true
+		}
+		for _, value := range current {
+			if nested, ok := findUsageMapRecursive(value, depth+1); ok {
+				return nested, true
+			}
+		}
+	case []interface{}:
+		for _, value := range current {
+			if nested, ok := findUsageMapRecursive(value, depth+1); ok {
+				return nested, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func getStringValue(value interface{}) string {
