@@ -29,7 +29,7 @@
 | `aggregated_tokens` | 聚合令牌（ag） | `id`, `user_id`, `key`, `status`, `expired_time`, `model_limits`, `allow_ips` |
 | `model_pricings` | 上游模型定价与能力缓存 | `model_name`, `provider_id`, `quota_type`, `enable_groups` |
 | `model_routes` | 模型路由表 | `model_name`, `provider_id`, `provider_token_id`, `priority`, `weight`, `enabled` |
-| `usage_logs` | 调用日志与统计 | `user_id`, `provider_name`, `model_name`, `status`, `cost_usd`, `response_time_ms`, `created_at` |
+| `usage_logs` | 调用日志与统计 | `user_id`, `provider_name`, `model_name`, `request_id`, `relay_request_id`, `attempt_index`, `usage_source`, `cost_usd`, `response_time_ms`, `created_at` |
 
 ## 字段语义要点
 
@@ -61,7 +61,10 @@
 ### usage_logs
 
 - 支持记录流式/非流式请求、首 token 延迟、估算成本。
-- 可按 provider/model/status/关键词筛选与聚合统计。
+- `request_id` 表示单次上游尝试；`relay_request_id` 关联同一次客户端请求下的多次尝试。
+- `attempt_index` 表示同一 `relay_request_id` 内的尝试顺序。
+- `usage_source` 表示 usage 质量：`exact` / `estimated` / `missing`。
+- 可按 provider/model/status/关键词筛选与聚合统计，默认以请求级口径（可切换 attempt 口径）。
 - 路由健康调节会消费该表中的成功率、失败率与平均延迟统计。
 
 ## 数据流关系
@@ -77,4 +80,5 @@
 - 架构说明：[ARCHITECTURE.md](./ARCHITECTURE.md)
 - API 参考：[API_REFERENCE.md](./API_REFERENCE.md)
 - 运维手册：[OPERATIONS.md](./OPERATIONS.md)
+- 上线指引：[USAGE_LOG_ROLLOUT.md](./USAGE_LOG_ROLLOUT.md)
 - 项目结构：[PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md)

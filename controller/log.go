@@ -17,6 +17,7 @@ func parseLogListQuery(c *gin.Context) (PaginationParams, model.UsageLogQuery) {
 		ProviderName: strings.TrimSpace(c.Query("provider")),
 		Status:       strings.TrimSpace(c.DefaultQuery("status", "all")),
 		ViewTab:      strings.TrimSpace(c.DefaultQuery("view", "all")),
+		Aggregation:  strings.TrimSpace(strings.ToLower(c.DefaultQuery("aggregation", model.UsageAggregationRequest))),
 	}
 	return pagination, query
 }
@@ -79,7 +80,8 @@ func GetAllLogs(c *gin.Context) {
 }
 
 func GetDashboard(c *gin.Context) {
-	stats, err := model.GetDashboardStats()
+	aggregation := strings.TrimSpace(strings.ToLower(c.DefaultQuery("aggregation", model.UsageAggregationRequest)))
+	stats, err := model.GetDashboardStatsWithAggregation(aggregation)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return

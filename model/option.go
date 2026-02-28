@@ -62,6 +62,12 @@ func InitOptionMap() {
 	common.OptionMap["RoutingHealthMinMultiplier"] = "0.05"
 	common.OptionMap["RoutingHealthMaxMultiplier"] = "1.12"
 	common.OptionMap["RoutingHealthMinSamples"] = "5"
+	common.OptionMap[RelayResponseValidityGuardModeOptionKey] = defaultRelayResponseValidityGuardMode
+	common.OptionMap[RelayResponseValidityGuardEnabledOptionKey] = strconv.FormatBool(defaultRelayResponseValidityGuardEnabled)
+	common.OptionMap[RoutingInvalidResponseSuppressionEnabledOptionKey] = strconv.FormatBool(defaultInvalidResponseSuppressionEnabled)
+	common.OptionMap[RoutingInvalidResponseSuppressionThresholdOptionKey] = strconv.Itoa(defaultInvalidResponseSuppressionThreshold)
+	common.OptionMap[RoutingInvalidResponseSuppressionWindowMinutesOptionKey] = strconv.Itoa(defaultInvalidResponseSuppressionWindowMinutes)
+	common.OptionMap[RoutingInvalidResponseSuppressionCooldownMinutesOptionKey] = strconv.Itoa(defaultInvalidResponseSuppressionCooldownMinutes)
 	common.OptionMapRWMutex.Unlock()
 	options, _ := AllOption()
 	for _, option := range options {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // Relay is the main proxy handler for all OpenAI-compatible API calls
@@ -28,6 +29,7 @@ func Relay(c *gin.Context) {
 	c.Set("request_model_original", requestedModel)
 	c.Set("request_model_canonical", canonicalModel)
 	c.Set("request_model", canonicalModel)
+	c.Set("relay_request_id", strings.ReplaceAll(uuid.New().String(), "-", "")[:16])
 
 	// 2. Check model whitelist
 	if !aggToken.IsModelAllowed(canonicalModel) {
@@ -60,8 +62,11 @@ func Relay(c *gin.Context) {
 	}
 
 	var lastErr *service.ProxyAttemptError
+	attemptIndex := 0
 	for _, priorityGroup := range plan {
 		for _, attempt := range priorityGroup {
+			attemptIndex++
+			c.Set("relay_attempt_index", attemptIndex)
 			if attempt.Route.ModelName != "" {
 				c.Set("request_model_resolved", attempt.Route.ModelName)
 				c.Set("request_model", attempt.Route.ModelName)
