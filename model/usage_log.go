@@ -17,6 +17,12 @@ const (
 	UsageSourceExact     = "exact"
 	UsageSourceEstimated = "estimated"
 	UsageSourceMissing   = "missing"
+
+	UsageFailureCategoryTransport       = "transport_error"
+	UsageFailureCategoryUpstream        = "upstream_error"
+	UsageFailureCategoryInvalidResponse = "invalid_response"
+	UsageFailureCategoryReadError       = "read_error"
+	UsageFailureCategoryParseError      = "parse_error"
 )
 
 type UsageLog struct {
@@ -25,8 +31,8 @@ type UsageLog struct {
 	AggregatedTokenId     int     `json:"aggregated_token_id"`
 	ProviderId            int     `json:"provider_id" gorm:"index"`
 	ProviderName          string  `json:"provider_name" gorm:"type:varchar(128)"`
-	ProviderTokenId       int     `json:"provider_token_id"`
-	ModelName             string  `json:"model_name" gorm:"type:varchar(255);index"`
+	ProviderTokenId       int     `json:"provider_token_id" gorm:"index;index:idx_usage_logs_route_window,priority:1;index:idx_usage_logs_invalid_window,priority:1"`
+	ModelName             string  `json:"model_name" gorm:"type:varchar(255);index;index:idx_usage_logs_route_window,priority:2;index:idx_usage_logs_invalid_window,priority:2"`
 	PromptTokens          int     `json:"prompt_tokens"`
 	CompletionTokens      int     `json:"completion_tokens"`
 	CacheTokens           int     `json:"cache_tokens"`
@@ -39,16 +45,25 @@ type UsageLog struct {
 	CostUSD               float64 `json:"cost_usd"`
 	Status                int     `json:"status"`
 	ErrorMessage          string  `json:"error_message" gorm:"type:text"`
+	FailureCategory       string  `json:"failure_category" gorm:"type:varchar(32);index"`
+	InvalidReason         string  `json:"invalid_reason" gorm:"type:varchar(64);index"`
+	TransportStatusCode   int     `json:"transport_status_code"`
 	ClientIp              string  `json:"client_ip" gorm:"type:varchar(64)"`
 	RequestId             string  `json:"request_id" gorm:"type:varchar(64);index"`
-	RelayRequestId        string  `json:"relay_request_id" gorm:"type:varchar(64);index"`
-	AttemptIndex          int     `json:"attempt_index" gorm:"index"`
+	RelayRequestId        string  `json:"relay_request_id" gorm:"type:varchar(64);index;index:idx_usage_logs_relay_attempt,priority:1"`
+	AttemptIndex          int     `json:"attempt_index" gorm:"index;index:idx_usage_logs_relay_attempt,priority:2"`
+	RequestModelOriginal  string  `json:"request_model_original" gorm:"type:varchar(255)"`
+	RequestModelCanonical string  `json:"request_model_canonical" gorm:"type:varchar(255)"`
+	RequestModelResolved  string  `json:"request_model_resolved" gorm:"type:varchar(255)"`
 	UsageSource           string  `json:"usage_source" gorm:"type:varchar(16);index"`
 	UsageParser           string  `json:"usage_parser" gorm:"type:varchar(64)"`
-	CreatedAt             int64   `json:"created_at" gorm:"index"`
+	CreatedAt             int64   `json:"created_at" gorm:"index;index:idx_usage_logs_route_window,priority:3;index:idx_usage_logs_invalid_window,priority:3"`
 }
 
 func (l *UsageLog) Insert() error {
+	if DB == nil {
+		return fmt.Errorf("database not initialized")
+	}
 	if strings.TrimSpace(l.UsageSource) == "" {
 		l.UsageSource = UsageSourceMissing
 	}
@@ -75,10 +90,16 @@ func (l *UsageLog) Insert() error {
 		"cost_usd":                l.CostUSD,
 		"status":                  l.Status,
 		"error_message":           l.ErrorMessage,
+		"failure_category":        l.FailureCategory,
+		"invalid_reason":          l.InvalidReason,
+		"transport_status_code":   l.TransportStatusCode,
 		"client_ip":               l.ClientIp,
 		"request_id":              l.RequestId,
 		"relay_request_id":        l.RelayRequestId,
 		"attempt_index":           l.AttemptIndex,
+		"request_model_original":  l.RequestModelOriginal,
+		"request_model_canonical": l.RequestModelCanonical,
+		"request_model_resolved":  l.RequestModelResolved,
 		"usage_source":            l.UsageSource,
 		"usage_parser":            l.UsageParser,
 		"created_at":              l.CreatedAt,
@@ -97,14 +118,16 @@ type UsageLogQuery struct {
 }
 
 type UsageLogSummary struct {
-	Total        int64   `json:"total"`
-	SuccessCount int64   `json:"success_count"`
-	ErrorCount   int64   `json:"error_count"`
-	InputTokens  int64   `json:"input_tokens"`
-	OutputTokens int64   `json:"output_tokens"`
-	CacheTokens  int64   `json:"cache_tokens"`
-	TotalCost    float64 `json:"total_cost"`
-	AvgLatency   int64   `json:"avg_latency"`
+	Total                int64   `json:"total"`
+	SuccessCount         int64   `json:"success_count"`
+	ErrorCount           int64   `json:"error_count"`
+	InvalidResponseCount int64   `json:"invalid_response_count"`
+	InvalidResponseRate  float64 `json:"invalid_response_rate"`
+	InputTokens          int64   `json:"input_tokens"`
+	OutputTokens         int64   `json:"output_tokens"`
+	CacheTokens          int64   `json:"cache_tokens"`
+	TotalCost            float64 `json:"total_cost"`
+	AvgLatency           int64   `json:"avg_latency"`
 }
 
 func normalizeUsageAggregation(value string) string {
@@ -123,6 +146,20 @@ func isUsageLogSuccess(log *UsageLog) bool {
 	return log.Status == 1 && strings.TrimSpace(log.ErrorMessage) == ""
 }
 
+func isUsageLogInvalidResponse(log *UsageLog) bool {
+	if log == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(log.FailureCategory), UsageFailureCategoryInvalidResponse) {
+		return true
+	}
+	return strings.TrimSpace(log.InvalidReason) != ""
+}
+
+func usageLogInvalidResponseSQLCondition() string {
+	return "(failure_category = '" + UsageFailureCategoryInvalidResponse + "' OR (invalid_reason IS NOT NULL AND TRIM(invalid_reason) <> ''))"
+}
+
 func applyUsageLogCommonFilters(db *gorm.DB, query UsageLogQuery) *gorm.DB {
 	if query.UserID != nil {
 		db = db.Where("user_id = ?", *query.UserID)
@@ -133,8 +170,8 @@ func applyUsageLogCommonFilters(db *gorm.DB, query UsageLogQuery) *gorm.DB {
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
 		like := "%" + keyword + "%"
 		db = db.Where(
-			"(model_name LIKE ? OR provider_name LIKE ? OR request_id LIKE ? OR relay_request_id LIKE ? OR usage_source LIKE ? OR error_message LIKE ? OR client_ip LIKE ?)",
-			like, like, like, like, like, like, like,
+			"(model_name LIKE ? OR provider_name LIKE ? OR request_id LIKE ? OR relay_request_id LIKE ? OR usage_source LIKE ? OR error_message LIKE ? OR client_ip LIKE ? OR failure_category LIKE ? OR invalid_reason LIKE ? OR request_model_original LIKE ? OR request_model_canonical LIKE ? OR request_model_resolved LIKE ?)",
+			like, like, like, like, like, like, like, like, like, like, like, like,
 		)
 	}
 	return db
@@ -399,6 +436,7 @@ func summarizeUsageLogs(logs []*UsageLog) UsageLogSummary {
 		return UsageLogSummary{}
 	}
 	var successCount int64
+	var invalidResponseCount int64
 	var inputTokens int64
 	var outputTokens int64
 	var cacheTokens int64
@@ -409,6 +447,9 @@ func summarizeUsageLogs(logs []*UsageLog) UsageLogSummary {
 		if isUsageLogSuccess(log) {
 			successCount++
 		}
+		if isUsageLogInvalidResponse(log) {
+			invalidResponseCount++
+		}
 		inputTokens += int64(log.PromptTokens)
 		outputTokens += int64(log.CompletionTokens)
 		cacheTokens += int64(log.CacheTokens)
@@ -418,19 +459,23 @@ func summarizeUsageLogs(logs []*UsageLog) UsageLogSummary {
 
 	total := int64(len(logs))
 	avgLatency := int64(0)
+	invalidRate := 0.0
 	if total > 0 {
 		avgLatency = int64(math.Round(float64(latencySum) / float64(total)))
+		invalidRate = float64(invalidResponseCount) / float64(total)
 	}
 
 	return UsageLogSummary{
-		Total:        total,
-		SuccessCount: successCount,
-		ErrorCount:   total - successCount,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		CacheTokens:  cacheTokens,
-		TotalCost:    totalCost,
-		AvgLatency:   avgLatency,
+		Total:                total,
+		SuccessCount:         successCount,
+		ErrorCount:           total - successCount,
+		InvalidResponseCount: invalidResponseCount,
+		InvalidResponseRate:  invalidRate,
+		InputTokens:          inputTokens,
+		OutputTokens:         outputTokens,
+		CacheTokens:          cacheTokens,
+		TotalCost:            totalCost,
+		AvgLatency:           avgLatency,
 	}
 }
 
@@ -441,22 +486,25 @@ func QueryUsageLogSummary(query UsageLogQuery) (UsageLogSummary, error) {
 		isSuccessCondition := "(status = 1 AND (error_message IS NULL OR TRIM(error_message) = ''))"
 
 		type usageLogSummaryRaw struct {
-			Total        int64
-			SuccessCount int64
-			ErrorCount   int64
-			InputTokens  int64
-			OutputTokens int64
-			CacheTokens  int64
-			TotalCost    float64
-			AvgLatency   float64
+			Total                int64
+			SuccessCount         int64
+			ErrorCount           int64
+			InvalidResponseCount int64
+			InputTokens          int64
+			OutputTokens         int64
+			CacheTokens          int64
+			TotalCost            float64
+			AvgLatency           float64
 		}
 
 		var raw usageLogSummaryRaw
+		invalidCondition := usageLogInvalidResponseSQLCondition()
 		err := applyUsageLogFilters(DB.Model(&UsageLog{}), query).
 			Select(
 				"COUNT(*) AS total",
 				"SUM(CASE WHEN "+isSuccessCondition+" THEN 1 ELSE 0 END) AS success_count",
 				"SUM(CASE WHEN "+isErrorCondition+" THEN 1 ELSE 0 END) AS error_count",
+				"SUM(CASE WHEN "+invalidCondition+" THEN 1 ELSE 0 END) AS invalid_response_count",
 				"COALESCE(SUM(prompt_tokens), 0) AS input_tokens",
 				"COALESCE(SUM(completion_tokens), 0) AS output_tokens",
 				"COALESCE(SUM(cache_tokens), 0) AS cache_tokens",
@@ -468,15 +516,22 @@ func QueryUsageLogSummary(query UsageLogQuery) (UsageLogSummary, error) {
 			return UsageLogSummary{}, err
 		}
 
+		invalidRate := 0.0
+		if raw.Total > 0 {
+			invalidRate = float64(raw.InvalidResponseCount) / float64(raw.Total)
+		}
+
 		return UsageLogSummary{
-			Total:        raw.Total,
-			SuccessCount: raw.SuccessCount,
-			ErrorCount:   raw.ErrorCount,
-			InputTokens:  raw.InputTokens,
-			OutputTokens: raw.OutputTokens,
-			CacheTokens:  raw.CacheTokens,
-			TotalCost:    raw.TotalCost,
-			AvgLatency:   int64(math.Round(raw.AvgLatency)),
+			Total:                raw.Total,
+			SuccessCount:         raw.SuccessCount,
+			ErrorCount:           raw.ErrorCount,
+			InvalidResponseCount: raw.InvalidResponseCount,
+			InvalidResponseRate:  invalidRate,
+			InputTokens:          raw.InputTokens,
+			OutputTokens:         raw.OutputTokens,
+			CacheTokens:          raw.CacheTokens,
+			TotalCost:            raw.TotalCost,
+			AvgLatency:           int64(math.Round(raw.AvgLatency)),
 		}, nil
 	}
 
@@ -529,6 +584,8 @@ type DashboardStats struct {
 	TotalRequests    int64               `json:"total_requests"`
 	SuccessRequests  int64               `json:"success_requests"`
 	FailedRequests   int64               `json:"failed_requests"`
+	InvalidResponses int64               `json:"invalid_responses"`
+	InvalidRate      float64             `json:"invalid_rate"`
 	TotalProviders   int64               `json:"total_providers"`
 	TotalModels      int64               `json:"total_models"`
 	TotalRoutes      int64               `json:"total_routes"`
@@ -587,6 +644,10 @@ func getDashboardStatsAttempt() (*DashboardStats, error) {
 	DB.Model(&UsageLog{}).Count(&stats.TotalRequests)
 	DB.Model(&UsageLog{}).Where("status = 1 AND (error_message = '' OR error_message IS NULL)").Count(&stats.SuccessRequests)
 	stats.FailedRequests = stats.TotalRequests - stats.SuccessRequests
+	DB.Model(&UsageLog{}).Where(usageLogInvalidResponseSQLCondition()).Count(&stats.InvalidResponses)
+	if stats.TotalRequests > 0 {
+		stats.InvalidRate = float64(stats.InvalidResponses) / float64(stats.TotalRequests)
+	}
 	stats.TotalProviders = CountProviders()
 	stats.TotalRoutes = CountModelRoutes()
 
@@ -723,8 +784,14 @@ func getDashboardStatsRequest() (*DashboardStats, error) {
 		if isUsageLogSuccess(log) {
 			stats.SuccessRequests++
 		}
+		if isUsageLogInvalidResponse(log) {
+			stats.InvalidResponses++
+		}
 	}
 	stats.FailedRequests = stats.TotalRequests - stats.SuccessRequests
+	if stats.TotalRequests > 0 {
+		stats.InvalidRate = float64(stats.InvalidResponses) / float64(stats.TotalRequests)
+	}
 	stats.TotalProviders = CountProviders()
 	stats.TotalRoutes = CountModelRoutes()
 	models, _ := GetDistinctModels()

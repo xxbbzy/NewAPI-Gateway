@@ -111,6 +111,89 @@ func TestQueryUsageLogSummaryRequestAggregationUsesCollapsedRows(t *testing.T) {
 	if attemptSummary.Total != 3 {
 		t.Fatalf("expected attempt summary total=3, got %+v", attemptSummary)
 	}
+	if attemptSummary.InvalidResponseCount != 0 || attemptSummary.InvalidResponseRate != 0 {
+		t.Fatalf("expected no invalid-response stats in this fixture, got %+v", attemptSummary)
+	}
+}
+
+func TestRequestAggregationRepresentativeDeterministicWithFailureMetadata(t *testing.T) {
+	originDB := DB
+	DB = prepareUsageLogAggregationTestDB(t)
+	defer func() { DB = originDB }()
+
+	rows := []*UsageLog{
+		{
+			RelayRequestId: "relay-1", AttemptIndex: 1, RequestId: "req-1a", ProviderName: "p1", ModelName: "gpt",
+			Status: 0, ErrorMessage: "invalid response", FailureCategory: UsageFailureCategoryInvalidResponse, InvalidReason: "no_actionable_output",
+			RequestModelOriginal: "alias-gpt", RequestModelCanonical: "gpt", RequestModelResolved: "gpt-2026",
+			CreatedAt: 100,
+		},
+		{
+			RelayRequestId: "relay-1", AttemptIndex: 2, RequestId: "req-1b", ProviderName: "p2", ModelName: "gpt",
+			Status: 1, ErrorMessage: "", FailureCategory: "", InvalidReason: "",
+			RequestModelOriginal: "alias-gpt", RequestModelCanonical: "gpt", RequestModelResolved: "gpt-2026",
+			CreatedAt: 101,
+		},
+	}
+	for _, row := range rows {
+		if err := DB.Create(row).Error; err != nil {
+			t.Fatalf("seed usage log failed: %v", err)
+		}
+	}
+
+	requestLogs, total, err := QueryUsageLogs(UsageLogQuery{Aggregation: UsageAggregationRequest, Offset: 0, Limit: 10})
+	if err != nil {
+		t.Fatalf("query request aggregation failed: %v", err)
+	}
+	if total != 1 || len(requestLogs) != 1 {
+		t.Fatalf("expected one aggregated request row, got total=%d len=%d", total, len(requestLogs))
+	}
+	selected := requestLogs[0]
+	if selected.RequestId != "req-1b" || selected.Status != 1 {
+		t.Fatalf("expected successful attempt selected as representative, got %+v", *selected)
+	}
+	if selected.RequestModelOriginal != "alias-gpt" || selected.RequestModelCanonical != "gpt" || selected.RequestModelResolved != "gpt-2026" {
+		t.Fatalf("expected model identity metadata preserved, got %+v", *selected)
+	}
+}
+
+func TestSummaryAndDashboardExposeInvalidResponseMetrics(t *testing.T) {
+	originDB := DB
+	DB = prepareUsageLogAggregationTestDB(t)
+	defer func() { DB = originDB }()
+
+	rows := []*UsageLog{
+		{RelayRequestId: "r-1", AttemptIndex: 1, RequestId: "a-1", ProviderName: "p1", ProviderId: 1, ModelName: "gpt", Status: 0, FailureCategory: UsageFailureCategoryInvalidResponse, InvalidReason: "no_actionable_output", CreatedAt: 100},
+		{RelayRequestId: "r-1", AttemptIndex: 2, RequestId: "a-2", ProviderName: "p1", ProviderId: 1, ModelName: "gpt", Status: 1, CreatedAt: 101},
+		{RelayRequestId: "r-2", AttemptIndex: 1, RequestId: "b-1", ProviderName: "p2", ProviderId: 2, ModelName: "glm", Status: 0, ErrorMessage: "transport fail", FailureCategory: UsageFailureCategoryTransport, CreatedAt: 102},
+	}
+	for _, row := range rows {
+		if err := DB.Create(row).Error; err != nil {
+			t.Fatalf("seed usage log failed: %v", err)
+		}
+	}
+
+	attemptSummary, err := QueryUsageLogSummary(UsageLogQuery{Aggregation: UsageAggregationAttempt})
+	if err != nil {
+		t.Fatalf("attempt summary failed: %v", err)
+	}
+	if attemptSummary.Total != 3 || attemptSummary.InvalidResponseCount != 1 {
+		t.Fatalf("unexpected invalid-response summary counts: %+v", attemptSummary)
+	}
+	if attemptSummary.InvalidResponseRate <= 0.3 || attemptSummary.InvalidResponseRate >= 0.34 {
+		t.Fatalf("unexpected invalid-response rate: %+v", attemptSummary)
+	}
+
+	statsAttempt, err := GetDashboardStatsWithAggregation(UsageAggregationAttempt)
+	if err != nil {
+		t.Fatalf("attempt dashboard stats failed: %v", err)
+	}
+	if statsAttempt.InvalidResponses != 1 {
+		t.Fatalf("expected dashboard invalid responses=1, got %+v", statsAttempt)
+	}
+	if statsAttempt.InvalidRate <= 0.3 || statsAttempt.InvalidRate >= 0.34 {
+		t.Fatalf("unexpected dashboard invalid rate: %+v", statsAttempt)
+	}
 }
 
 func TestGetDashboardStatsWithAggregationSupportsLegacyRows(t *testing.T) {

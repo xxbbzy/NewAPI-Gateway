@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,9 +30,11 @@ var proxyHTTPClient = &http.Client{
 }
 
 type ProxyAttemptError struct {
-	StatusCode int
-	Message    string
-	Retryable  bool
+	StatusCode      int
+	Message         string
+	Retryable       bool
+	FailureCategory string
+	InvalidReason   string
 }
 
 func (e *ProxyAttemptError) Error() string {
@@ -45,6 +48,9 @@ func (e *ProxyAttemptError) Error() string {
 func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model.Provider) *ProxyAttemptError {
 	startTime := time.Now()
 	requestId := uuid.New().String()[:8]
+	validityMode := model.GetRelayResponseValidityMode()
+	validateResponse := validityMode != model.RelayResponseValidityModeOff
+	enforceResponse := validityMode == model.RelayResponseValidityModeEnforce
 
 	// Get user info from context
 	aggToken := c.MustGet("agg_token").(*model.AggregatedToken)
@@ -133,11 +139,15 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 			0,
 			0,
 			errorMsg,
+			model.UsageFailureCategoryTransport,
+			"",
+			0,
 		)
 		return &ProxyAttemptError{
-			StatusCode: http.StatusBadGateway,
-			Message:    "upstream request failed: " + err.Error(),
-			Retryable:  true,
+			StatusCode:      http.StatusBadGateway,
+			Message:         "upstream request failed: " + err.Error(),
+			Retryable:       true,
+			FailureCategory: model.UsageFailureCategoryTransport,
 		}
 	}
 	defer resp.Body.Close()
@@ -147,7 +157,30 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 	isStream := strings.Contains(contentType, "text/event-stream")
 
 	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			errorMsg := buildErrorMessage(
+				fmt.Sprintf("upstream status %d and failed to read response body: %v", resp.StatusCode, readErr),
+				c,
+				bodyBytes,
+			)
+			logProxyErrorTrace(c, requestId, provider, token, errorMsg)
+			elapsed := time.Since(startTime).Milliseconds()
+			logUsage(
+				aggToken, provider, token, c, requestId,
+				usageMetrics{ModelName: getContextModelName(c)}, isStream, 0, int(elapsed), errorMsg,
+				model.UsageFailureCategoryReadError,
+				"upstream_status_body_read_failed",
+				resp.StatusCode,
+			)
+			return &ProxyAttemptError{
+				StatusCode:      resp.StatusCode,
+				Message:         errorMsg,
+				Retryable:       true,
+				FailureCategory: model.UsageFailureCategoryReadError,
+				InvalidReason:   "upstream_status_body_read_failed",
+			}
+		}
 		usage := extractUsageAndModelFromJSON(respBody)
 		if usage.ModelName == "" {
 			usage.ModelName = getContextModelName(c)
@@ -158,18 +191,37 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 		logUsage(
 			aggToken, provider, token, c, requestId,
 			usage, isStream, 0, int(elapsed), errorMsg,
+			model.UsageFailureCategoryUpstream,
+			"",
+			resp.StatusCode,
 		)
 		return &ProxyAttemptError{
-			StatusCode: resp.StatusCode,
-			Message:    errorMsg,
-			Retryable:  true,
+			StatusCode:      resp.StatusCode,
+			Message:         errorMsg,
+			Retryable:       true,
+			FailureCategory: model.UsageFailureCategoryUpstream,
 		}
 	}
+	if isStream {
+		return proxyStreamResponse(
+			c, resp, aggToken, provider, token, requestId, bodyBytes, startTime, validateResponse, enforceResponse,
+		)
+	}
+	return proxyNonStreamResponse(
+		c, resp, aggToken, provider, token, requestId, bodyBytes, startTime, validateResponse, enforceResponse,
+	)
+}
 
-	// 11. Copy response headers
+type responseValidationResult struct {
+	Valid           bool
+	InvalidReason   string
+	FailureCategory string
+	Message         string
+}
+
+func copyUpstreamResponseHeaders(c *gin.Context, resp *http.Response) {
 	for key, values := range resp.Header {
 		lowerKey := strings.ToLower(key)
-		// Skip hop-by-hop headers
 		if lowerKey == "transfer-encoding" || lowerKey == "connection" {
 			continue
 		}
@@ -177,71 +229,525 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 			c.Writer.Header().Add(key, v)
 		}
 	}
+}
 
-	if isStream {
-		// Stream SSE response
+func proxyNonStreamResponse(
+	c *gin.Context,
+	resp *http.Response,
+	aggToken *model.AggregatedToken,
+	provider *model.Provider,
+	token *model.ProviderToken,
+	requestId string,
+	bodyBytes []byte,
+	startTime time.Time,
+	validateResponse bool,
+	enforceResponse bool,
+) *ProxyAttemptError {
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		errorMsg := buildErrorMessage("failed to read upstream response body: "+readErr.Error(), c, bodyBytes)
+		logProxyErrorTrace(c, requestId, provider, token, errorMsg)
+		elapsed := time.Since(startTime).Milliseconds()
+		logUsage(
+			aggToken, provider, token, c, requestId,
+			usageMetrics{ModelName: getContextModelName(c)}, false, 0, int(elapsed), errorMsg,
+			model.UsageFailureCategoryReadError,
+			"body_read_failed",
+			resp.StatusCode,
+		)
+		return &ProxyAttemptError{
+			StatusCode:      resp.StatusCode,
+			Message:         errorMsg,
+			Retryable:       true,
+			FailureCategory: model.UsageFailureCategoryReadError,
+			InvalidReason:   "body_read_failed",
+		}
+	}
+
+	usage := extractUsageAndModelFromJSON(respBody)
+	if usage.ModelName == "" {
+		usage.ModelName = getContextModelName(c)
+	}
+	validation := validateNonStreamResponse(c.Request.URL.Path, respBody, validateResponse)
+	if !validation.Valid {
+		elapsed := time.Since(startTime).Milliseconds()
+		if enforceResponse {
+			errorMsg := buildErrorMessage(validation.Message, c, bodyBytes)
+			logProxyErrorTrace(c, requestId, provider, token, errorMsg)
+			logUsage(
+				aggToken, provider, token, c, requestId,
+				usage, false, 0, int(elapsed), errorMsg,
+				validation.FailureCategory,
+				validation.InvalidReason,
+				resp.StatusCode,
+			)
+			return &ProxyAttemptError{
+				StatusCode:      resp.StatusCode,
+				Message:         errorMsg,
+				Retryable:       true,
+				FailureCategory: validation.FailureCategory,
+				InvalidReason:   validation.InvalidReason,
+			}
+		}
+		common.SysLog(fmt.Sprintf(
+			"[proxy-observe-invalid] request_id=%s provider=%s provider_id=%d provider_token_id=%d reason=%s",
+			requestId, provider.Name, provider.Id, token.Id, validation.InvalidReason,
+		))
+		copyUpstreamResponseHeaders(c, resp)
+		c.Status(resp.StatusCode)
+		_, _ = c.Writer.Write(respBody)
+		logUsage(
+			aggToken, provider, token, c, requestId,
+			usage, false, 0, int(elapsed), "",
+			validation.FailureCategory,
+			validation.InvalidReason,
+			resp.StatusCode,
+		)
+		return nil
+	}
+
+	copyUpstreamResponseHeaders(c, resp)
+	c.Status(resp.StatusCode)
+	_, _ = c.Writer.Write(respBody)
+	elapsed := time.Since(startTime).Milliseconds()
+	logUsage(
+		aggToken, provider, token, c, requestId,
+		usage, false, 0, int(elapsed), "", "", "", resp.StatusCode,
+	)
+	return nil
+}
+
+func proxyStreamResponse(
+	c *gin.Context,
+	resp *http.Response,
+	aggToken *model.AggregatedToken,
+	provider *model.Provider,
+	token *model.ProviderToken,
+	requestId string,
+	bodyBytes []byte,
+	startTime time.Time,
+	validateResponse bool,
+	enforceResponse bool,
+) *ProxyAttemptError {
+	flusher, _ := c.Writer.(http.Flusher)
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	pendingLines := make([]string, 0, 64)
+	streamUsage := usageMetrics{}
+	firstTokenMs := 0
+	committed := false
+	meaningfulDelta := false
+	invalidReason := ""
+	failureCategory := ""
+
+	writeLine := func(line string) {
+		_, _ = fmt.Fprintf(c.Writer, "%s\n", line)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	commitResponse := func() {
+		if committed {
+			return
+		}
+		copyUpstreamResponseHeaders(c, resp)
 		c.Writer.Header().Set("Cache-Control", "no-cache")
 		c.Writer.Header().Set("Connection", "keep-alive")
 		c.Status(resp.StatusCode)
-		flusher, ok := c.Writer.(http.Flusher)
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		streamUsage := usageMetrics{}
-		firstTokenMs := 0
-		for scanner.Scan() {
-			line := scanner.Text()
-			fmt.Fprintf(c.Writer, "%s\n", line)
-			currentUsage, hasData := extractUsageAndModelFromSSELine(line)
-			if hasData && firstTokenMs == 0 {
-				firstTokenMs = int(time.Since(startTime).Milliseconds())
+		for _, line := range pendingLines {
+			writeLine(line)
+		}
+		pendingLines = pendingLines[:0]
+		committed = true
+	}
+
+	if !enforceResponse {
+		commitResponse()
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		currentUsage, hasData := extractUsageAndModelFromSSELine(line)
+		if hasData && firstTokenMs == 0 {
+			firstTokenMs = int(time.Since(startTime).Milliseconds())
+		}
+		streamUsage = mergeUsageMetrics(streamUsage, currentUsage)
+
+		classification := classifySSEDataLine(c.Request.URL.Path, line, validateResponse)
+		if classification.ParseFailed && invalidReason == "" {
+			invalidReason = classification.InvalidReason
+			failureCategory = classification.FailureCategory
+		}
+		if classification.ErrorEnvelope && invalidReason == "" {
+			invalidReason = classification.InvalidReason
+			failureCategory = classification.FailureCategory
+		}
+		if classification.MeaningfulDelta {
+			meaningfulDelta = true
+		}
+
+		if enforceResponse && !committed {
+			pendingLines = append(pendingLines, line)
+			if meaningfulDelta {
+				commitResponse()
 			}
-			streamUsage = mergeUsageMetrics(streamUsage, currentUsage)
-			if ok {
-				flusher.Flush()
+			continue
+		}
+		writeLine(line)
+	}
+
+	if streamUsage.ModelName == "" {
+		streamUsage.ModelName = getContextModelName(c)
+	}
+	elapsed := time.Since(startTime).Milliseconds()
+	if scanErr := scanner.Err(); scanErr != nil {
+		errorMsg := buildErrorMessage("stream scanner error: "+scanErr.Error(), c, bodyBytes)
+		logProxyErrorTrace(c, requestId, provider, token, errorMsg)
+		if !committed {
+			category := model.UsageFailureCategoryReadError
+			reason := "stream_read_failed"
+			logUsage(
+				aggToken, provider, token, c, requestId,
+				streamUsage, true, firstTokenMs, int(elapsed), errorMsg,
+				category, reason, resp.StatusCode,
+			)
+			return &ProxyAttemptError{
+				StatusCode:      resp.StatusCode,
+				Message:         errorMsg,
+				Retryable:       true,
+				FailureCategory: category,
+				InvalidReason:   reason,
 			}
 		}
-		errorMsg := ""
-		if scanErr := scanner.Err(); scanErr != nil {
-			if errorMsg != "" {
-				errorMsg += "; scanner error: " + scanErr.Error()
-			} else {
-				errorMsg = "stream scanner error: " + scanErr.Error()
-			}
-		}
-		if errorMsg != "" {
-			errorMsg = buildErrorMessage(errorMsg, c, bodyBytes)
-			logProxyErrorTrace(c, requestId, provider, token, errorMsg)
-		}
-		if streamUsage.ModelName == "" {
-			streamUsage.ModelName = getContextModelName(c)
-		}
-		elapsed := time.Since(startTime).Milliseconds()
 		logUsage(
 			aggToken, provider, token, c, requestId,
 			streamUsage, true, firstTokenMs, int(elapsed), errorMsg,
+			model.UsageFailureCategoryReadError, "stream_read_failed_after_commit", resp.StatusCode,
 		)
-	} else {
-		// Non-streaming response
-		c.Status(resp.StatusCode)
-		respBody, _ := io.ReadAll(resp.Body)
-		c.Writer.Write(respBody)
+		return nil
+	}
 
-		elapsed := time.Since(startTime).Milliseconds()
-		usage := extractUsageAndModelFromJSON(respBody)
-		if usage.ModelName == "" {
-			usage.ModelName = getContextModelName(c)
+	if validateResponse && !meaningfulDelta {
+		if invalidReason == "" {
+			invalidReason = "stream_no_meaningful_delta"
 		}
-		errorMsg := ""
-		if resp.StatusCode >= 400 {
-			errorMsg = buildErrorMessage(string(respBody), c, bodyBytes)
+		if failureCategory == "" {
+			failureCategory = model.UsageFailureCategoryInvalidResponse
+		}
+		if enforceResponse {
+			errorMsg := buildErrorMessage("invalid stream response: "+invalidReason, c, bodyBytes)
 			logProxyErrorTrace(c, requestId, provider, token, errorMsg)
+			logUsage(
+				aggToken, provider, token, c, requestId,
+				streamUsage, true, firstTokenMs, int(elapsed), errorMsg,
+				failureCategory, invalidReason, resp.StatusCode,
+			)
+			return &ProxyAttemptError{
+				StatusCode:      resp.StatusCode,
+				Message:         errorMsg,
+				Retryable:       true,
+				FailureCategory: failureCategory,
+				InvalidReason:   invalidReason,
+			}
 		}
+		common.SysLog(fmt.Sprintf(
+			"[proxy-observe-invalid-stream] request_id=%s provider=%s provider_id=%d provider_token_id=%d reason=%s",
+			requestId, provider.Name, provider.Id, token.Id, invalidReason,
+		))
 		logUsage(
 			aggToken, provider, token, c, requestId,
-			usage, false, 0, int(elapsed), errorMsg,
+			streamUsage, true, firstTokenMs, int(elapsed), "",
+			failureCategory, invalidReason, resp.StatusCode,
 		)
+		return nil
 	}
+
+	logUsage(
+		aggToken, provider, token, c, requestId,
+		streamUsage, true, firstTokenMs, int(elapsed), "", "", "", resp.StatusCode,
+	)
 	return nil
+}
+
+type streamLineClassification struct {
+	MeaningfulDelta bool
+	ErrorEnvelope   bool
+	ParseFailed     bool
+	InvalidReason   string
+	FailureCategory string
+}
+
+func classifySSEDataLine(path string, line string, validate bool) streamLineClassification {
+	if !validate {
+		return streamLineClassification{}
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "data:") {
+		return streamLineClassification{}
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+	if payload == "" || payload == "[DONE]" {
+		return streamLineClassification{}
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
+		return streamLineClassification{
+			ParseFailed:     true,
+			InvalidReason:   "stream_payload_parse_failed",
+			FailureCategory: model.UsageFailureCategoryParseError,
+		}
+	}
+	if isErrorEnvelopePayload(parsed) {
+		return streamLineClassification{
+			ErrorEnvelope:   true,
+			InvalidReason:   "stream_error_envelope",
+			FailureCategory: model.UsageFailureCategoryInvalidResponse,
+		}
+	}
+	if hasActionableStreamOutput(path, parsed) {
+		return streamLineClassification{MeaningfulDelta: true}
+	}
+	return streamLineClassification{}
+}
+
+func validateNonStreamResponse(path string, body []byte, validate bool) responseValidationResult {
+	if !validate {
+		return responseValidationResult{Valid: true}
+	}
+	if len(body) == 0 {
+		return responseValidationResult{
+			Valid:           false,
+			InvalidReason:   "empty_body",
+			FailureCategory: model.UsageFailureCategoryInvalidResponse,
+			Message:         "invalid non-stream response: empty body",
+		}
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return responseValidationResult{
+			Valid:           false,
+			InvalidReason:   "payload_parse_failed",
+			FailureCategory: model.UsageFailureCategoryParseError,
+			Message:         "invalid non-stream response: payload parse failed",
+		}
+	}
+	if isErrorEnvelopePayload(payload) {
+		return responseValidationResult{
+			Valid:           false,
+			InvalidReason:   "error_envelope_2xx",
+			FailureCategory: model.UsageFailureCategoryInvalidResponse,
+			Message:         "invalid non-stream response: 2xx error envelope",
+		}
+	}
+	if !hasActionableNonStreamOutput(path, payload) {
+		return responseValidationResult{
+			Valid:           false,
+			InvalidReason:   "no_actionable_output",
+			FailureCategory: model.UsageFailureCategoryInvalidResponse,
+			Message:         "invalid non-stream response: no actionable output",
+		}
+	}
+	return responseValidationResult{Valid: true}
+}
+
+func isErrorEnvelopePayload(payload map[string]interface{}) bool {
+	if payload == nil {
+		return false
+	}
+	raw, ok := payload["error"]
+	if !ok || raw == nil {
+		return false
+	}
+	switch errNode := raw.(type) {
+	case map[string]interface{}:
+		if msg := strings.TrimSpace(getStringValue(errNode["message"])); msg != "" {
+			return true
+		}
+		if errType := strings.TrimSpace(getStringValue(errNode["type"])); errType != "" {
+			return true
+		}
+		return len(errNode) > 0
+	case string:
+		return strings.TrimSpace(errNode) != ""
+	default:
+		return true
+	}
+}
+
+func hasActionableNonStreamOutput(path string, payload map[string]interface{}) bool {
+	lowerPath := strings.ToLower(strings.TrimSpace(path))
+	if strings.Contains(lowerPath, "/embeddings") {
+		return hasNonEmptyDataArray(payload)
+	}
+	if strings.Contains(lowerPath, "/images") {
+		return hasNonEmptyDataArray(payload)
+	}
+	if strings.Contains(lowerPath, "/audio") {
+		return hasAnyTextualOutput(payload)
+	}
+	if hasActionableChoices(payload) {
+		return true
+	}
+	if hasActionableMessageOutput(payload) {
+		return true
+	}
+	if hasActionableResponsesOutput(payload) {
+		return true
+	}
+	return hasAnyTextualOutput(payload)
+}
+
+func hasActionableStreamOutput(path string, payload map[string]interface{}) bool {
+	if isErrorEnvelopePayload(payload) {
+		return false
+	}
+	if hasActionableChoices(payload) || hasActionableMessageOutput(payload) || hasActionableResponsesOutput(payload) {
+		return true
+	}
+	lowerPath := strings.ToLower(strings.TrimSpace(path))
+	if strings.Contains(lowerPath, "/embeddings") {
+		return hasNonEmptyDataArray(payload)
+	}
+	return hasAnyTextualOutput(payload)
+}
+
+func hasNonEmptyDataArray(payload map[string]interface{}) bool {
+	dataRaw, ok := payload["data"]
+	if !ok {
+		return false
+	}
+	switch data := dataRaw.(type) {
+	case []interface{}:
+		return len(data) > 0
+	case map[string]interface{}:
+		return len(data) > 0
+	default:
+		return false
+	}
+}
+
+func hasActionableChoices(payload map[string]interface{}) bool {
+	choicesRaw, ok := payload["choices"]
+	if !ok {
+		return false
+	}
+	choices, ok := choicesRaw.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, item := range choices {
+		choice, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if hasAnyTextualOutput(choice) {
+			return true
+		}
+		if message, ok := choice["message"].(map[string]interface{}); ok && hasAnyTextualOutput(message) {
+			return true
+		}
+		if delta, ok := choice["delta"].(map[string]interface{}); ok && hasAnyTextualOutput(delta) {
+			return true
+		}
+		if toolCalls, ok := choice["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasActionableMessageOutput(payload map[string]interface{}) bool {
+	message, ok := payload["message"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	if hasAnyTextualOutput(message) {
+		return true
+	}
+	contentRaw, ok := message["content"]
+	if !ok {
+		return false
+	}
+	return hasContentArrayText(contentRaw)
+}
+
+func hasActionableResponsesOutput(payload map[string]interface{}) bool {
+	if text := strings.TrimSpace(getStringValue(payload["output_text"])); text != "" {
+		return true
+	}
+	outputRaw, ok := payload["output"]
+	if !ok {
+		return false
+	}
+	outputArr, ok := outputRaw.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, item := range outputArr {
+		if hasAnyTextualOutput(item) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasContentArrayText(contentRaw interface{}) bool {
+	switch content := contentRaw.(type) {
+	case string:
+		return strings.TrimSpace(content) != ""
+	case []interface{}:
+		for _, item := range content {
+			if hasAnyTextualOutput(item) {
+				return true
+			}
+		}
+	case map[string]interface{}:
+		return hasAnyTextualOutput(content)
+	}
+	return false
+}
+
+func hasAnyTextualOutput(node interface{}) bool {
+	return hasAnyTextualOutputDepth(node, 0)
+}
+
+func hasAnyTextualOutputDepth(node interface{}, depth int) bool {
+	if depth > 6 || node == nil {
+		return false
+	}
+	switch value := node.(type) {
+	case string:
+		text := strings.TrimSpace(value)
+		if text == "" {
+			return false
+		}
+		lower := strings.ToLower(text)
+		if lower == "assistant" || lower == "tool" || lower == "system" || lower == "user" {
+			return false
+		}
+		return true
+	case map[string]interface{}:
+		for key, nested := range value {
+			lowerKey := strings.ToLower(strings.TrimSpace(key))
+			if lowerKey == "id" || lowerKey == "object" || lowerKey == "model" || lowerKey == "role" || lowerKey == "type" || lowerKey == "finish_reason" || lowerKey == "index" || lowerKey == "created" {
+				continue
+			}
+			if lowerKey == "usage" {
+				continue
+			}
+			if hasAnyTextualOutputDepth(nested, depth+1) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, nested := range value {
+			if hasAnyTextualOutputDepth(nested, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type usageMetrics struct {
@@ -332,7 +838,7 @@ func getRequestBodyBytes(c *gin.Context) ([]byte, error) {
 
 func logUsage(aggToken *model.AggregatedToken, provider *model.Provider, token *model.ProviderToken,
 	c *gin.Context, requestId string, usage usageMetrics, isStream bool, firstTokenMs int,
-	responseTimeMs int, errorMsg string) {
+	responseTimeMs int, errorMsg string, failureCategory string, invalidReason string, transportStatusCode int) {
 
 	status := 1
 	if errorMsg != "" {
@@ -384,10 +890,16 @@ func logUsage(aggToken *model.AggregatedToken, provider *model.Provider, token *
 		CostUSD:               usage.CostUSD,
 		Status:                status,
 		ErrorMessage:          errorMsg,
+		FailureCategory:       strings.TrimSpace(failureCategory),
+		InvalidReason:         strings.TrimSpace(invalidReason),
+		TransportStatusCode:   transportStatusCode,
 		ClientIp:              c.ClientIP(),
 		RequestId:             requestId,
 		RelayRequestId:        relayRequestId,
 		AttemptIndex:          attemptIndex,
+		RequestModelOriginal:  strings.TrimSpace(c.GetString("request_model_original")),
+		RequestModelCanonical: strings.TrimSpace(c.GetString("request_model_canonical")),
+		RequestModelResolved:  strings.TrimSpace(c.GetString("request_model_resolved")),
 		UsageSource:           usage.UsageSource,
 		UsageParser:           usage.UsageParser,
 	}
@@ -509,11 +1021,125 @@ func requestBodyForErrorLog(c *gin.Context, bodyBytes []byte) string {
 	if len(bodyBytes) == 0 {
 		return "(empty)"
 	}
+	fp := shortBodyFingerprint(bodyBytes)
 	contentType := strings.ToLower(strings.TrimSpace(c.GetHeader("Content-Type")))
+	debugEnabled := strings.ToLower(strings.TrimSpace(os.Getenv("DEBUG_PROXY_PAYLOAD"))) == "1"
 	if strings.Contains(contentType, "application/json") {
-		return strings.TrimSpace(string(bodyBytes))
+		if !debugEnabled {
+			keys := extractTopLevelJSONKeys(bodyBytes)
+			if len(keys) == 0 {
+				return fmt.Sprintf("(json redacted) bytes=%d sha256=%s", len(bodyBytes), fp)
+			}
+			return fmt.Sprintf("(json redacted) bytes=%d sha256=%s keys=%s", len(bodyBytes), fp, strings.Join(keys, ","))
+		}
+		return "[debug_payload] " + buildDebugPayloadSnippet(bodyBytes)
 	}
-	return fmt.Sprintf("(non-json omitted) content_type=%s body_size=%d", contentType, len(bodyBytes))
+	return fmt.Sprintf("(non-json redacted) content_type=%s bytes=%d sha256=%s", contentType, len(bodyBytes), fp)
+}
+
+func shortBodyFingerprint(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:6])
+}
+
+func extractTopLevelJSONKeys(body []byte) []string {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > 8 {
+		keys = keys[:8]
+	}
+	return keys
+}
+
+func buildDebugPayloadSnippet(body []byte) string {
+	const maxDebugPayloadBytes = 2048
+	var payload interface{}
+	if err := json.Unmarshal(body, &payload); err == nil {
+		redacted := redactCredentialLikeValues(payload)
+		if redactedBody, err := json.Marshal(redacted); err == nil {
+			snippet := strings.TrimSpace(string(redactedBody))
+			if len(snippet) > maxDebugPayloadBytes {
+				snippet = snippet[:maxDebugPayloadBytes] + "...(truncated)"
+			}
+			return snippet
+		}
+	}
+	snippet := strings.TrimSpace(string(body))
+	if len(snippet) > maxDebugPayloadBytes {
+		snippet = snippet[:maxDebugPayloadBytes] + "...(truncated)"
+	}
+	return snippet
+}
+
+func redactCredentialLikeValues(node interface{}) interface{} {
+	switch value := node.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(value))
+		for key, nested := range value {
+			if isCredentialLikeKey(key) {
+				if strVal, ok := nested.(string); ok {
+					out[key] = tokenSummary(strVal)
+				} else {
+					out[key] = "(redacted)"
+				}
+				continue
+			}
+			out[key] = redactCredentialLikeValues(nested)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, 0, len(value))
+		for _, nested := range value {
+			out = append(out, redactCredentialLikeValues(nested))
+		}
+		return out
+	case string:
+		trimmed := strings.TrimSpace(value)
+		if looksLikeCredentialValue(trimmed) {
+			return tokenSummary(trimmed)
+		}
+		return value
+	default:
+		return node
+	}
+}
+
+func isCredentialLikeKey(key string) bool {
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	if lowerKey == "" {
+		return false
+	}
+	sensitiveSegments := []string{"authorization", "api_key", "apikey", "token", "secret", "password", "sk"}
+	for _, segment := range sensitiveSegments {
+		if strings.Contains(lowerKey, segment) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeCredentialValue(value string) bool {
+	if value == "" {
+		return false
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "bearer ") {
+		return true
+	}
+	if strings.HasPrefix(lower, "sk-") || strings.HasPrefix(lower, "ag-") {
+		return true
+	}
+	if len(value) >= 32 && strings.IndexAny(value, " \t\r\n") < 0 {
+		return true
+	}
+	return false
 }
 
 func logProxyErrorTrace(c *gin.Context, requestId string, provider *model.Provider, token *model.ProviderToken, errorMsg string) {

@@ -150,6 +150,10 @@ func InitDB() (err error) {
 		if err != nil {
 			return err
 		}
+		err = ensureUsageLogObservabilityIndexes()
+		if err != nil {
+			return err
+		}
 		err = db.AutoMigrate(&CheckinRun{})
 		if err != nil {
 			return err

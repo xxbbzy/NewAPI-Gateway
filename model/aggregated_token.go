@@ -2,8 +2,10 @@ package model
 
 import (
 	"NewAPI-Gateway/common"
+	"crypto/rand"
 	"errors"
-	"math/rand"
+	"fmt"
+	"math/big"
 	"strings"
 	"time"
 )
@@ -23,13 +25,32 @@ type AggregatedToken struct {
 }
 
 const aggTokenKeyChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+const maxAggTokenInsertAttempts = 8
 
-func generateAggTokenKey() string {
+var aggTokenKeyGenerator = generateAggTokenKey
+
+func generateAggTokenKey() (string, error) {
 	b := make([]byte, 48)
+	max := big.NewInt(int64(len(aggTokenKeyChars)))
 	for i := range b {
-		b[i] = aggTokenKeyChars[rand.Intn(len(aggTokenKeyChars))]
+		n, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		b[i] = aggTokenKeyChars[n.Int64()]
 	}
-	return string(b)
+	return string(b), nil
+}
+
+func isAggTokenKeyCollisionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate entry") ||
+		strings.Contains(msg, "duplicate key value") ||
+		strings.Contains(msg, "unique constraint failed") ||
+		strings.Contains(msg, "duplicated key not allowed")
 }
 
 func GetAllUserAggTokens(userId int, startIdx int, num int) ([]*AggregatedToken, error) {
@@ -102,9 +123,12 @@ func ValidateAggToken(key string) (*AggregatedToken, *User, error) {
 	}
 
 	// Update accessed time asynchronously
-	go func() {
-		DB.Model(token).Update("accessed_at", time.Now().Unix())
-	}()
+	go func(target *AggregatedToken) {
+		if DB == nil || target == nil {
+			return
+		}
+		_ = DB.Model(target).Update("accessed_at", time.Now().Unix()).Error
+	}(token)
 
 	return token, user, nil
 }
@@ -177,9 +201,23 @@ func (t *AggregatedToken) IsIPAllowed(ip string) bool {
 }
 
 func (t *AggregatedToken) Insert() error {
-	t.Key = generateAggTokenKey()
 	t.CreatedAt = time.Now().Unix()
-	return DB.Create(t).Error
+	var lastErr error
+	for attempt := 0; attempt < maxAggTokenInsertAttempts; attempt++ {
+		key, err := aggTokenKeyGenerator()
+		if err != nil {
+			return err
+		}
+		t.Key = key
+		lastErr = DB.Create(t).Error
+		if lastErr == nil {
+			return nil
+		}
+		if !isAggTokenKeyCollisionError(lastErr) {
+			return lastErr
+		}
+	}
+	return fmt.Errorf("failed to generate unique aggregated token key after %d attempts: %w", maxAggTokenInsertAttempts, lastErr)
 }
 
 func (t *AggregatedToken) Update() error {

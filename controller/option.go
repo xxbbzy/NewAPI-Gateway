@@ -92,6 +92,19 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case model.RelayResponseValidityGuardModeOptionKey,
+		model.RelayResponseValidityGuardEnabledOptionKey,
+		model.RoutingInvalidResponseSuppressionEnabledOptionKey,
+		model.RoutingInvalidResponseSuppressionThresholdOptionKey,
+		model.RoutingInvalidResponseSuppressionWindowMinutesOptionKey,
+		model.RoutingInvalidResponseSuppressionCooldownMinutesOptionKey:
+		if message, ok := model.ValidateRelayReliabilityOption(option.Key, option.Value); ok && message != "" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": message,
+			})
+			return
+		}
 	case "RoutingUsageWindowHours":
 		value, err := strconv.Atoi(strings.TrimSpace(option.Value))
 		if err != nil || value < 1 || value > 24*30 {

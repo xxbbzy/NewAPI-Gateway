@@ -49,6 +49,9 @@ func main() {
 
 	// Initialize options
 	model.InitOptionMap()
+	if err = model.RunRelayReliabilityStartupPreflight(); err != nil {
+		common.FatalLog(err)
+	}
 
 	// Start cron jobs (sync & checkin)
 	service.StartCronJobs()

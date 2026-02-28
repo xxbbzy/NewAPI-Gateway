@@ -119,3 +119,39 @@ func TestLogProxyErrorTraceIncludesModelIdentities(t *testing.T) {
 	}
 }
 
+func TestRequestBodyForErrorLogRedactsByDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("DEBUG_PROXY_PAYLOAD", "0")
+
+	ctx := newProxyLoggingTestContext()
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	body := []byte(`{"model":"gpt","messages":[{"role":"user","content":"secret prompt"}],"api_key":"sk-1234567890abcdef"}`)
+
+	result := requestBodyForErrorLog(ctx, body)
+	if !strings.Contains(result, "(json redacted)") {
+		t.Fatalf("expected redacted marker, got %q", result)
+	}
+	if strings.Contains(result, "secret prompt") || strings.Contains(result, "sk-1234567890abcdef") {
+		t.Fatalf("expected sensitive content to be redacted, got %q", result)
+	}
+}
+
+func TestRequestBodyForErrorLogDebugModeMasksCredentialLikeFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("DEBUG_PROXY_PAYLOAD", "1")
+
+	ctx := newProxyLoggingTestContext()
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	body := []byte(`{"authorization":"Bearer sk-abcdefghijklmnop","api_key":"sk-1234567890abcdef","messages":[{"content":"visible"}]}`)
+
+	result := requestBodyForErrorLog(ctx, body)
+	if !strings.Contains(result, "[debug_payload]") {
+		t.Fatalf("expected debug payload marker, got %q", result)
+	}
+	if strings.Contains(result, "sk-abcdefghijklmnop") || strings.Contains(result, "sk-1234567890abcdef") {
+		t.Fatalf("expected credentials to be masked in debug payload, got %q", result)
+	}
+	if !strings.Contains(result, "visible") {
+		t.Fatalf("expected non-sensitive content to remain visible in debug mode, got %q", result)
+	}
+}
