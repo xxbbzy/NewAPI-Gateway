@@ -3,6 +3,7 @@ package controller
 import (
 	"NewAPI-Gateway/common"
 	"NewAPI-Gateway/model"
+	"NewAPI-Gateway/service"
 	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"net/http"
@@ -15,7 +16,7 @@ func GetOptions(c *gin.Context) {
 	var options []*model.Option
 	common.OptionMapRWMutex.Lock()
 	for k, v := range common.OptionMap {
-		if strings.Contains(k, "Token") || strings.Contains(k, "Secret") {
+		if model.IsSensitiveOptionKey(k) {
 			continue
 		}
 		options = append(options, &model.Option{
@@ -42,8 +43,42 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
+	const loginMethodGuardMessage = "至少保留一种登录方式（密码登录或 GitHub 登录）"
 	switch option.Key {
+	case "PasswordLoginEnabled":
+		normalized := strings.TrimSpace(strings.ToLower(option.Value))
+		if normalized != "true" && normalized != "false" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "密码登录开关必须是 true 或 false",
+			})
+			return
+		}
+		option.Value = normalized
+		if normalized == "false" && !common.GitHubOAuthEnabled {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": loginMethodGuardMessage,
+			})
+			return
+		}
 	case "GitHubOAuthEnabled":
+		normalized := strings.TrimSpace(strings.ToLower(option.Value))
+		if normalized != "true" && normalized != "false" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "GitHub OAuth 开关必须是 true 或 false",
+			})
+			return
+		}
+		option.Value = normalized
+		if normalized == "false" && !common.PasswordLoginEnabled {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": loginMethodGuardMessage,
+			})
+			return
+		}
 		if option.Value == "true" && common.GitHubClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -99,6 +134,34 @@ func UpdateOption(c *gin.Context) {
 		model.RoutingInvalidResponseSuppressionWindowMinutesOptionKey,
 		model.RoutingInvalidResponseSuppressionCooldownMinutesOptionKey:
 		if message, ok := model.ValidateRelayReliabilityOption(option.Key, option.Value); ok && message != "" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": message,
+			})
+			return
+		}
+	case model.BackupEnabledOptionKey,
+		model.BackupTriggerModeOptionKey,
+		model.BackupScheduleCronOptionKey,
+		model.BackupMinIntervalSecondsOptionKey,
+		model.BackupDebounceSecondsOptionKey,
+		model.BackupWebDAVURLOptionKey,
+		model.BackupWebDAVUsernameOptionKey,
+		model.BackupWebDAVPasswordOptionKey,
+		model.BackupWebDAVBasePathOptionKey,
+		model.BackupEncryptEnabledOptionKey,
+		model.BackupEncryptPassphraseOptionKey,
+		model.BackupRetentionDaysOptionKey,
+		model.BackupRetentionMaxFilesOptionKey,
+		model.BackupSpoolDirOptionKey,
+		model.BackupCommandTimeoutSecondsOptionKey,
+		model.BackupMaxRetriesOptionKey,
+		model.BackupRetryBaseSecondsOptionKey,
+		model.BackupMySQLDumpCommandOptionKey,
+		model.BackupPostgresDumpCommandOptionKey,
+		model.BackupMySQLRestoreCommandOptionKey,
+		model.BackupPostgresRestoreCommandOptionKey:
+		if message, ok := model.ValidateBackupOption(option.Key, option.Value); ok && message != "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": message,
@@ -190,5 +253,6 @@ func UpdateOption(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
+	service.MarkBackupDirty("option_update:" + option.Key)
 	return
 }

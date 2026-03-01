@@ -75,6 +75,37 @@ SQL_DSN='postgres://user:pass@127.0.0.1:5432/gateway?sslmode=disable'
   - Session 使用 Cookie 存储。
   - 限流回退为进程内内存实现。
 
+## 运行时备份配置（`PUT /api/option/`）
+
+以下配置为运行时系统选项，不是环境变量。建议由 `Root` 管理员在后台“系统设置 -> 备份与恢复”中维护。
+
+| Key | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `BackupEnabled` | bool | `false` | 是否启用备份系统 |
+| `BackupTriggerMode` | string | `hybrid` | 触发模式：`hybrid/event/schedule` |
+| `BackupScheduleCron` | string | `0 */6 * * *` | 定时兜底备份 cron（5 段） |
+| `BackupMinIntervalSeconds` | int | `600` | 两次备份最小间隔 |
+| `BackupDebounceSeconds` | int | `30` | 事件触发备份去抖时间 |
+| `BackupWebDAVURL` | string | 空 | WebDAV 服务地址（`http/https`） |
+| `BackupWebDAVUsername` | string | 空 | WebDAV 用户名 |
+| `BackupWebDAVPassword` | string | 空 | WebDAV 密码 |
+| `BackupWebDAVBasePath` | string | `/newapi-gateway-backups` | WebDAV 远端目录 |
+| `BackupEncryptEnabled` | bool | `true` | 是否启用备份包加密 |
+| `BackupEncryptPassphrase` | string | 空 | 备份加密口令（建议至少 8 位） |
+| `BackupRetentionDays` | int | `14` | 远端备份按天保留 |
+| `BackupRetentionMaxFiles` | int | `100` | 远端备份最大文件数 |
+| `BackupSpoolDir` | string | `upload/backup-spool` | 本地备份与重试队列目录 |
+| `BackupCommandTimeoutSeconds` | int | `600` | dump/restore 命令超时 |
+| `BackupMaxRetries` | int | `8` | 上传失败最大重试次数 |
+| `BackupRetryBaseSeconds` | int | `30` | 重试指数退避基准秒数 |
+| `BackupMySQLDumpCommand` | string | `mysqldump` | MySQL dump 命令名 |
+| `BackupPostgresDumpCommand` | string | `pg_dump` | PostgreSQL dump 命令名 |
+| `BackupMySQLRestoreCommand` | string | `mysql` | MySQL restore 命令名 |
+| `BackupPostgresRestoreCommand` | string | `psql` | PostgreSQL restore 命令名 |
+
+WebDAV 前端配置与 warning 处理的完整步骤见：
+[WEBDAV_SETTINGS_GUIDE.md](./WEBDAV_SETTINGS_GUIDE.md)
+
 ## 推荐生产配置
 
 1. 固定设置 `SESSION_SECRET`，避免重启后 Session 失效。
@@ -88,3 +119,4 @@ SQL_DSN='postgres://user:pass@127.0.0.1:5432/gateway?sslmode=disable'
 - 快速开始：[QUICK_START.md](./QUICK_START.md)
 - 部署方案：[DEPLOYMENT.md](./DEPLOYMENT.md)
 - 架构说明：[ARCHITECTURE.md](./ARCHITECTURE.md)
+- WebDAV 设置教程：[WEBDAV_SETTINGS_GUIDE.md](./WEBDAV_SETTINGS_GUIDE.md)

@@ -169,6 +169,27 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 | `RoutingHealthMinMultiplier` | float | `0.05` | `0 ~ 10` | 健康倍率下限 |
 | `RoutingHealthMaxMultiplier` | float | `1.12` | `0 ~ 10` | 健康倍率上限 |
 | `RoutingHealthMinSamples` | int | `5` | `1 ~ 1000` | 启用健康调节所需最小样本数 |
+| `BackupEnabled` | bool | `false` | `true/false` | 是否启用备份系统 |
+| `BackupTriggerMode` | string | `hybrid` | `hybrid/event/schedule` | 备份触发模式 |
+| `BackupScheduleCron` | string | `0 */6 * * *` | 5 段 cron | 定时兜底备份计划 |
+| `BackupMinIntervalSeconds` | int | `600` | 非负整数 | 两次备份最小间隔 |
+| `BackupDebounceSeconds` | int | `30` | 非负整数 | 事件触发去抖时间 |
+| `BackupWebDAVURL` | string | 空 | `http/https URL` | WebDAV 备份地址 |
+| `BackupWebDAVUsername` | string | 空 | 任意字符串 | WebDAV 用户名 |
+| `BackupWebDAVPassword` | string | 空 | 任意字符串 | WebDAV 密码 |
+| `BackupWebDAVBasePath` | string | `/newapi-gateway-backups` | 非空路径 | 远端备份目录 |
+| `BackupEncryptEnabled` | bool | `true` | `true/false` | 是否启用备份加密 |
+| `BackupEncryptPassphrase` | string | 空 | 长度建议 >= 8 | 备份加密口令 |
+| `BackupRetentionDays` | int | `14` | 非负整数 | 远端保留天数 |
+| `BackupRetentionMaxFiles` | int | `100` | 非负整数 | 远端保留文件上限 |
+| `BackupSpoolDir` | string | `upload/backup-spool` | 非空路径 | 本地重试队列目录 |
+| `BackupCommandTimeoutSeconds` | int | `600` | 正整数 | dump/restore 命令超时 |
+| `BackupMaxRetries` | int | `8` | 非负整数 | 上传失败最大重试次数 |
+| `BackupRetryBaseSeconds` | int | `30` | 正整数 | 重试退避基准秒数 |
+| `BackupMySQLDumpCommand` | string | `mysqldump` | 非空字符串 | MySQL 逻辑备份命令 |
+| `BackupPostgresDumpCommand` | string | `pg_dump` | 非空字符串 | PostgreSQL 逻辑备份命令 |
+| `BackupMySQLRestoreCommand` | string | `mysql` | 非空字符串 | MySQL 恢复命令 |
+| `BackupPostgresRestoreCommand` | string | `psql` | 非空字符串 | PostgreSQL 恢复命令 |
 
 占比贡献公式：
 
@@ -211,6 +232,32 @@ GET /v1beta/models/xxx?key=ag-xxxxxxxx
 - `POST /api/provider/:id/tokens` 新增服务端校验：
   - `group_name` 不能为空。
   - `group_name` 必须属于当前渠道可用分组，否则返回校验错误。
+
+## 备份与恢复 API（Session，`RootAuth + NoTokenAuth`）
+
+| Method | Path | 说明 |
+| --- | --- | --- |
+| GET | `/api/backup/status` | 读取备份状态、预检结果、最近运行信息 |
+| GET | `/api/backup/runs?limit=50` | 查询备份运行历史 |
+| GET | `/api/backup/retries?limit=100` | 查询重试队列历史 |
+| POST | `/api/backup/trigger?trigger=manual` | 触发手动备份 |
+| POST | `/api/backup/restore/validate` | 备份恢复 dry-run 校验 |
+| POST | `/api/backup/restore` | 执行恢复（需 `confirm=true`） |
+
+恢复请求体示例：
+
+```json
+{
+  "local_path": "/abs/path/to/backup.zip.enc",
+  "dry_run": false,
+  "confirm": true
+}
+```
+
+补充说明：
+
+- 强烈建议先调用 `POST /api/backup/restore/validate` 做 dry-run，再执行恢复。
+- 恢复接口是高风险动作，建议在维护窗口执行并完成业务健康检查。
 
 ## Plugin Provider 相关 API（Token，`AdminAuth + TokenOnlyAuth`）
 

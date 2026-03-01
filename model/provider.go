@@ -33,9 +33,36 @@ type Provider struct {
 	LastCheckinResultAt      int64  `json:"last_checkin_result_at" gorm:"-"`
 }
 
+func applyProviderReadProjection(db *gorm.DB) *gorm.DB {
+	if db == nil || db.Dialector == nil || db.Dialector.Name() != "sqlite" {
+		return db
+	}
+	// SQLite can hold text in INTEGER columns. Cast defensively to avoid scan failures
+	// on historical/dirty rows restored from old snapshots.
+	return db.Select(`
+id,
+name,
+base_url,
+access_token,
+CAST(user_id AS INTEGER) AS user_id,
+CAST(status AS INTEGER) AS status,
+CAST(priority AS INTEGER) AS priority,
+CAST(weight AS INTEGER) AS weight,
+CAST(checkin_enabled AS INTEGER) AS checkin_enabled,
+CAST(last_checkin_at AS INTEGER) AS last_checkin_at,
+balance,
+CAST(balance_updated AS INTEGER) AS balance_updated,
+pricing_group_ratio,
+pricing_usable_group,
+pricing_supported_endpoint,
+model_alias_mapping,
+remark,
+CAST(created_at AS INTEGER) AS created_at`)
+}
+
 func GetAllProviders(startIdx int, num int) ([]*Provider, error) {
 	var providers []*Provider
-	err := DB.Order("id desc").Limit(num).Offset(startIdx).Find(&providers).Error
+	err := applyProviderReadProjection(DB).Order("id desc").Limit(num).Offset(startIdx).Find(&providers).Error
 	return providers, err
 }
 
@@ -54,7 +81,7 @@ func QueryProviders(startIdx int, num int) ([]*Provider, int64, error) {
 	}
 
 	var providers []*Provider
-	err := DB.Order("id desc").Limit(num).Offset(startIdx).Find(&providers).Error
+	err := applyProviderReadProjection(DB).Order("id desc").Limit(num).Offset(startIdx).Find(&providers).Error
 	return providers, total, err
 }
 
@@ -63,25 +90,25 @@ func GetProviderById(id int) (*Provider, error) {
 		return nil, errors.New("id 为空")
 	}
 	var provider Provider
-	err := DB.First(&provider, "id = ?", id).Error
+	err := applyProviderReadProjection(DB).First(&provider, "id = ?", id).Error
 	return &provider, err
 }
 
 func GetEnabledProviders() ([]*Provider, error) {
 	var providers []*Provider
-	err := DB.Where("status = ?", common.UserStatusEnabled).Find(&providers).Error
+	err := applyProviderReadProjection(DB).Where("status = ?", common.UserStatusEnabled).Find(&providers).Error
 	return providers, err
 }
 
 func GetCheckinEnabledProviders() ([]*Provider, error) {
 	var providers []*Provider
-	err := DB.Where("status = ? AND checkin_enabled = ?", common.UserStatusEnabled, true).Find(&providers).Error
+	err := applyProviderReadProjection(DB).Where("status = ? AND checkin_enabled = ?", common.UserStatusEnabled, true).Find(&providers).Error
 	return providers, err
 }
 
 func GetUncheckinProviders(dayStart int64) ([]*Provider, error) {
 	var providers []*Provider
-	err := DB.Where(
+	err := applyProviderReadProjection(DB).Where(
 		"status = ? AND checkin_enabled = ? AND last_checkin_at < ?",
 		common.UserStatusEnabled,
 		true,
@@ -177,7 +204,7 @@ func (p *Provider) CleanForResponse() {
 // Returns nil, nil if not found.
 func FindProviderByBaseURLAndUserID(baseURL string, userID int) (*Provider, error) {
 	var provider Provider
-	err := DB.Where("base_url = ? AND user_id = ?", baseURL, userID).First(&provider).Error
+	err := applyProviderReadProjection(DB).Where("base_url = ? AND user_id = ?", baseURL, userID).First(&provider).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}

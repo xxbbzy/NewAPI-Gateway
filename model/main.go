@@ -162,6 +162,14 @@ func InitDB() (err error) {
 		if err != nil {
 			return err
 		}
+		err = db.AutoMigrate(&BackupRun{})
+		if err != nil {
+			return err
+		}
+		err = db.AutoMigrate(&BackupUploadRetry{})
+		if err != nil {
+			return err
+		}
 		err = createRootAccountIfNeed()
 		return err
 	} else {

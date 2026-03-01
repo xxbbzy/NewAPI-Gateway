@@ -19,6 +19,8 @@
 | 供应商接入填写 | [provider-form-guide.md](./provider-form-guide.md) -> [provider-form-example.md](./provider-form-example.md) -> [OPERATIONS.md](./OPERATIONS.md) |
 | 插件对接供应商管理 | [provider-plugin-token-implementation.md](./provider-plugin-token-implementation.md) -> [API_REFERENCE.md](./API_REFERENCE.md) -> [FAQ.md](./FAQ.md) |
 | 日常运维值守 | [OPERATIONS.md](./OPERATIONS.md) -> [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md) -> [FAQ.md](./FAQ.md) |
+| 备份恢复演练 | [CONFIGURATION.md](./CONFIGURATION.md) -> [OPERATIONS.md](./OPERATIONS.md) -> [BACKUP_DR_RUNBOOK.md](./BACKUP_DR_RUNBOOK.md) |
+| WebDAV 页面配置 | [WEBDAV_SETTINGS_GUIDE.md](./WEBDAV_SETTINGS_GUIDE.md) -> [CONFIGURATION.md](./CONFIGURATION.md) -> [OPERATIONS.md](./OPERATIONS.md) |
 | 二次开发 | [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) -> [DEVELOPMENT.md](./DEVELOPMENT.md) -> [API_REFERENCE.md](./API_REFERENCE.md) |
 
 ## 完整文档清单
@@ -41,6 +43,8 @@
 | 专题 | [provider-form-guide.md](./provider-form-guide.md) | 添加供应商字段获取说明（Access Token / Upstream User ID） |
 | 专题 | [provider-form-example.md](./provider-form-example.md) | 添加供应商与创建上游令牌填写示例 |
 | 专题 | [provider-plugin-token-implementation.md](./provider-plugin-token-implementation.md) | 插件通过个人访问令牌对接供应商管理的改造实施方案 |
+| 专题 | [BACKUP_DR_RUNBOOK.md](./BACKUP_DR_RUNBOOK.md) | 备份与灾备演练标准流程（含 dry-run 与恢复检查） |
+| 专题 | [WEBDAV_SETTINGS_GUIDE.md](./WEBDAV_SETTINGS_GUIDE.md) | WebDAV（webdev）设置、warning 处理与恢复操作教程 |
 | 专题 | [pagination-migration.md](./pagination-migration.md) | 管理列表分页协议迁移与兼容策略 |
 | 专题 | [FAQ.md](./FAQ.md) | 高频问题与排障捷径 |
 | 合规 | [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) | 第三方许可声明 |
@@ -58,6 +62,7 @@
 | 供应商模型映射策略变更 | [model-alias-manual-mapping.md](./model-alias-manual-mapping.md), [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | 供应商接入表单字段与交互变更 | [provider-form-guide.md](./provider-form-guide.md), [provider-form-example.md](./provider-form-example.md), [README.md](../README.md) |
 | 插件 Token 接口或鉴权策略变更 | [provider-plugin-token-implementation.md](./provider-plugin-token-implementation.md), [API_REFERENCE.md](./API_REFERENCE.md), [FAQ.md](./FAQ.md) |
+| 备份/恢复能力、WebDAV、灾备流程变更 | [CONFIGURATION.md](./CONFIGURATION.md), [OPERATIONS.md](./OPERATIONS.md), [BACKUP_DR_RUNBOOK.md](./BACKUP_DR_RUNBOOK.md), [WEBDAV_SETTINGS_GUIDE.md](./WEBDAV_SETTINGS_GUIDE.md), [API_REFERENCE.md](./API_REFERENCE.md) |
 
 ## 文档维护约定
 
