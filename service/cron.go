@@ -26,6 +26,7 @@ func StartCronJobs() {
 				go syncAllProviders()
 			case <-checkinSchedulerTicker.C:
 				go RunScheduledCheckinIfNeeded(time.Now())
+				go EvaluateBackupScheduleIfNeeded(time.Now())
 			case <-stopCron:
 				syncTicker.Stop()
 				checkinSchedulerTicker.Stop()
@@ -35,7 +36,8 @@ func StartCronJobs() {
 	}()
 
 	go RunScheduledCheckinIfNeeded(time.Now())
-	common.SysLog("cron jobs started: sync every 5m, scheduled checkin evaluated every 1m")
+	go EvaluateBackupScheduleIfNeeded(time.Now())
+	common.SysLog("cron jobs started: sync every 5m, scheduled checkin evaluated every 1m, backup scheduler evaluated every 1m")
 }
 
 // StopCronJobs stops background tasks

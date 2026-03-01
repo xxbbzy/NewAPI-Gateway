@@ -166,6 +166,7 @@ func UpdateProviderModelAliasMapping(c *gin.Context) {
 		return
 	}
 	provider.UpdateModelAliasMapping(payload)
+	service.MarkBackupDirty(fmt.Sprintf("provider_alias_mapping_update:%d", provider.Id))
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -303,6 +304,9 @@ func ImportProviders(c *gin.Context) {
 		}
 	}
 	msg := fmt.Sprintf("新增 %d 个，更新 %d 个，跳过 %d 个", created, updated, skipped)
+	if created > 0 || updated > 0 {
+		service.MarkBackupDirty("provider_import")
+	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": msg})
 }
 
@@ -320,6 +324,7 @@ func CreateProvider(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	service.MarkBackupDirty(fmt.Sprintf("provider_create:%d", provider.Id))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 
@@ -355,6 +360,7 @@ func UpdateProvider(c *gin.Context) {
 			return
 		}
 	}
+	service.MarkBackupDirty(fmt.Sprintf("provider_update:%d", provider.Id))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 
@@ -369,6 +375,7 @@ func DeleteProvider(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	service.MarkBackupDirty(fmt.Sprintf("provider_delete:%d", id))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 
@@ -663,6 +670,7 @@ func CreateProviderToken(c *gin.Context) {
 	}
 	// Sync tokens back to get the newly created token
 	syncProviderAfterTokenCreate(provider)
+	service.MarkBackupDirty(fmt.Sprintf("provider_token_create_upstream:%d", providerId))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Token 已在上游创建，正在同步回本地"})
 }
 
@@ -682,6 +690,7 @@ func UpdateProviderToken(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	service.MarkBackupDirty(fmt.Sprintf("provider_token_update:%d", token.Id))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 
@@ -713,5 +722,6 @@ func DeleteProviderToken(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	service.MarkBackupDirty(fmt.Sprintf("provider_token_delete:%d", token.Id))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }

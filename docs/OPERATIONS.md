@@ -79,25 +79,47 @@
 
 ## 数据备份与恢复
 
-### SQLite
+### 日常备份巡检
 
-备份：
+1. 检查 `GET /api/backup/status`：
+   - `preflight.ready=true`
+   - 最近运行状态为 `success` 或可解释的 `failed`
+   - `pending_retry_count` 未持续增长
+2. 抽查 `GET /api/backup/runs?limit=20`：
+   - 确认定时触发与事件触发均有记录
+   - 关注同一错误是否连续出现
+3. 抽查 `GET /api/backup/retries?limit=20`：
+   - 确认失败任务有重试推进
+   - 超限失败项已被标记 `failed`
 
-```bash
-cp gateway-aggregator.db gateway-aggregator.db.bak.$(date +%Y%m%d%H%M%S)
-```
+### 手动触发备份
 
-恢复：
+- API：`POST /api/backup/trigger?trigger=manual`
+- 建议场景：
+  - 大规模供应商导入后
+  - 高风险配置变更后
+  - 升级前留快照
 
-```bash
-cp gateway-aggregator.db.bak.<timestamp> gateway-aggregator.db
-```
+### 恢复演练（建议每月至少一次）
 
-建议在服务停止或低峰时执行，避免并发写入冲突。
+1. 准备恢复文件（本地路径或可下载的远端文件）。
+2. 执行 dry-run 校验：
+   - `POST /api/backup/restore/validate`
+3. dry-run 通过后，在维护窗口执行恢复：
+   - `POST /api/backup/restore`（`confirm=true`）
+4. 恢复后执行健康检查：
+   - 登录后台检查用户/供应商/路由是否可读
+   - 检查关键模型 relay 是否正常
 
-### MySQL / PostgreSQL
+前端逐步操作与 warning 说明可参考：
+[WEBDAV_SETTINGS_GUIDE.md](./WEBDAV_SETTINGS_GUIDE.md)
 
-按各自标准工具进行逻辑备份（`mysqldump` / `pg_dump`）。
+### 分阶段上线清单（建议）
+
+1. 阶段 1：只开启状态监控（`BackupEnabled=false`，验证 `status/preflight`）。
+2. 阶段 2：开启定时备份（`BackupTriggerMode=schedule`），观察 24~48 小时。
+3. 阶段 3：开启混合触发（`BackupTriggerMode=hybrid`），验证去抖与最小间隔。
+4. 阶段 4：执行一次完整恢复演练并记录 RTO/RPO。
 
 ## 安全建议
 
@@ -113,3 +135,4 @@ cp gateway-aggregator.db.bak.<timestamp> gateway-aggregator.db
 - 配置说明：[CONFIGURATION.md](./CONFIGURATION.md)
 - 常见问题：[FAQ.md](./FAQ.md)
 - API 参考：[API_REFERENCE.md](./API_REFERENCE.md)
+- WebDAV 设置教程：[WEBDAV_SETTINGS_GUIDE.md](./WEBDAV_SETTINGS_GUIDE.md)

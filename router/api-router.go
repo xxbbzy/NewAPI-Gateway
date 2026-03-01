@@ -57,6 +57,17 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.PUT("/", controller.UpdateOption)
 		}
 
+		backupRoute := apiRouter.Group("/backup")
+		backupRoute.Use(middleware.RootAuth(), middleware.NoTokenAuth())
+		{
+			backupRoute.GET("/status", controller.GetBackupStatusHandler)
+			backupRoute.GET("/runs", controller.GetBackupRunsHandler)
+			backupRoute.GET("/retries", controller.GetBackupRetryQueueHandler)
+			backupRoute.POST("/trigger", controller.TriggerBackupHandler)
+			backupRoute.POST("/restore/validate", controller.ValidateBackupRestoreHandler)
+			backupRoute.POST("/restore", controller.ExecuteBackupRestoreHandler)
+		}
+
 		// === Provider Management (Admin) ===
 		providerRoute := apiRouter.Group("/provider")
 		providerRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
