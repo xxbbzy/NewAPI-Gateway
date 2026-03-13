@@ -27,6 +27,13 @@ const flushPromises = async () => {
   });
 };
 
+const setInputValue = (input, value) => {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+};
+
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('ProvidersTable', () => {
@@ -51,6 +58,23 @@ describe('ProvidersTable', () => {
               total: 0,
               total_pages: 0,
               has_more: false,
+            },
+          },
+        });
+      }
+      if (url === '/api/provider/summary') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              total_providers: 2,
+              balance_total_usd: 12.5,
+              balance_account_count: 2,
+              balance_fresh_count: 1,
+              balance_stale_count: 1,
+              balance_never_updated_count: 0,
+              unreachable_providers: 1,
+              proxy_enabled_providers: 1,
             },
           },
         });
@@ -120,6 +144,59 @@ describe('ProvidersTable', () => {
     expect(container.textContent).toContain('Provider-A');
     expect(container.textContent).toContain('奖励额度：$1.00');
     expect(container.textContent).toContain('今日所有已启用签到渠道均已签到');
+    expect(container.textContent).toContain('余额汇总');
+    expect(container.textContent).toContain('$12.50');
+  });
+
+  it('renders site health independently from checkin enabled state in provider rows', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.startsWith('/api/provider/?p=')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [
+                {
+                  id: 1,
+                  name: 'Provider-A',
+                  base_url: 'https://a.example.com',
+                  created_at: 1730000000,
+                  status: 1,
+                  checkin_enabled: true,
+                  weight: 10,
+                  priority: 0,
+                  health_status: 'unreachable',
+                  health_blocked: true,
+                },
+              ],
+              p: 0,
+              page_size: 10,
+              total: 1,
+              total_pages: 1,
+              has_more: false,
+            },
+          },
+        });
+      }
+      if (url === '/api/provider/summary') {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      if (url === '/api/provider/checkin/summary?limit=1' || url === '/api/provider/checkin/messages?limit=20' || url === '/api/provider/checkin/uncheckin') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      return Promise.resolve({ data: { success: true, data: [] } });
+    });
+
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(container.textContent).toContain('Provider-A');
+    expect(container.textContent).toContain('不可用');
+    expect(container.textContent).toContain('已启用');
   });
 
   it('triggers unchecked-only checkin run from overview action', async () => {
@@ -200,6 +277,128 @@ describe('ProvidersTable', () => {
     await flushPromises();
 
     expect(API.post).toHaveBeenCalledWith('/api/provider/', expect.objectContaining({ user_id: 0 }));
+  });
+
+  it('resets provider list to first page when search keyword changes', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.startsWith('/api/provider/?p=0&page_size=10')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [{ id: 1, name: 'Provider-A', base_url: 'https://a.example.com', created_at: 1730000000, status: 1, checkin_enabled: false, weight: 10, priority: 0 }],
+              p: 0,
+              page_size: 10,
+              total: 11,
+              total_pages: 2,
+              has_more: true,
+            },
+          },
+        });
+      }
+      if (url.startsWith('/api/provider/?p=1&page_size=10')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [{ id: 2, name: 'Provider-B', base_url: 'https://b.example.com', created_at: 1730000000, status: 1, checkin_enabled: false, weight: 10, priority: 0 }],
+              p: 1,
+              page_size: 10,
+              total: 11,
+              total_pages: 2,
+              has_more: false,
+            },
+          },
+        });
+      }
+      if (url.includes('keyword=beta')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [{ id: 2, name: 'Provider-B', base_url: 'https://b.example.com', created_at: 1730000000, status: 1, checkin_enabled: false, weight: 10, priority: 0 }],
+              p: 0,
+              page_size: 10,
+              total: 1,
+              total_pages: 1,
+              has_more: false,
+            },
+          },
+        });
+      }
+      if (url === '/api/provider/summary') {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      if (url === '/api/provider/checkin/summary?limit=1' || url === '/api/provider/checkin/messages?limit=20' || url === '/api/provider/checkin/uncheckin') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      return Promise.resolve({ data: { success: true, data: [] } });
+    });
+
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const nextPageButton = container.querySelector('button[aria-label="第 2 页"]');
+    expect(nextPageButton).not.toBeNull();
+    await act(async () => {
+      nextPageButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    const searchInput = container.querySelector('input[placeholder="搜索名称、地址、备注、用户 ID"]');
+    expect(searchInput).not.toBeNull();
+    await act(async () => {
+      setInputValue(searchInput, 'beta');
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(API.get).toHaveBeenCalledWith(expect.stringContaining('/api/provider/?p=0&page_size=10&keyword=beta'));
+  });
+
+  it('submits provider proxy settings from the modal form', async () => {
+    API.post.mockResolvedValue({ data: { success: true, message: '' } });
+
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const addButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('添加供应商'));
+    await act(async () => {
+      addButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    const proxyToggle = container.querySelector('input#proxy_enabled');
+    expect(proxyToggle).not.toBeNull();
+    await act(async () => {
+      proxyToggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const proxyInput = Array.from(container.querySelectorAll('input')).find((input) => input.placeholder === 'http://user:pass@proxy.example.com:7890');
+    expect(proxyInput).not.toBeNull();
+    await act(async () => {
+      setInputValue(proxyInput, 'http://proxy.example.com:8080');
+    });
+
+    const saveButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '保存');
+    await act(async () => {
+      saveButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(API.post).toHaveBeenCalledWith('/api/provider/', expect.objectContaining({
+      proxy_enabled: true,
+      proxy_url: 'http://proxy.example.com:8080',
+    }));
   });
 
   it('renders already-signed message as success', async () => {

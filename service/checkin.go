@@ -169,10 +169,14 @@ func checkinProviderWithResult(provider *model.Provider) (*model.CheckinRunItem,
 		CheckedAt:    checkedAt,
 	}
 
-	client := NewUpstreamClient(provider.BaseURL, provider.AccessToken, provider.UserID)
+	client, clientErr := NewUpstreamClientForProvider(provider)
+	if clientErr != nil {
+		item.Message = strings.TrimSpace(sanitizeProviderErrorMessage(provider, clientErr.Error()))
+		return item, clientErr
+	}
 	result, err := client.Checkin()
 	if err != nil {
-		item.Message = strings.TrimSpace(err.Error())
+		item.Message = strings.TrimSpace(sanitizeProviderErrorMessage(provider, err.Error()))
 		if isUpstreamCheckinDisabledFailure(item.Message) {
 			if disableErr := provider.UpdateCheckinEnabled(false); disableErr != nil {
 				common.SysLog(fmt.Sprintf("failed to auto-disable checkin for provider %s: %v", provider.Name, disableErr))
@@ -181,6 +185,7 @@ func checkinProviderWithResult(provider *model.Provider) (*model.CheckinRunItem,
 				item.Message = appendUpstreamCheckinAutoDisableHint(item.Message)
 				common.SysLog(fmt.Sprintf("provider %s checkin auto-disabled due to upstream unavailable", provider.Name))
 			}
+			return item, err
 		}
 		return item, err
 	}
@@ -204,6 +209,18 @@ func getUncheckinCount(now time.Time, timezone string) int {
 		return 0
 	}
 	return len(providers)
+}
+
+func emitCheckinItemNotifications(run *model.CheckinRun, items []*model.CheckinRunItem) {
+	for _, item := range items {
+		if item == nil || strings.EqualFold(strings.TrimSpace(item.Status), "success") {
+			continue
+		}
+		NotifyAsync(buildCheckinFailureNotificationEvent(run, item))
+		if item.AutoDisabled {
+			NotifyAsync(buildProviderAutoDisableNotificationEvent(run, item))
+		}
+	}
 }
 
 func executeCheckinRun(
@@ -270,6 +287,8 @@ func executeCheckinRun(
 	if err := run.Update(); err != nil {
 		common.SysLog("update checkin run summary failed: " + err.Error())
 	}
+	NotifyAsync(buildCheckinSummaryNotificationEvent(run))
+	emitCheckinItemNotifications(run, items)
 	return run, nil
 }
 
@@ -397,6 +416,12 @@ func RunProviderCheckin(provider *model.Provider) (*model.CheckinRun, *model.Che
 	run.EndedAt = time.Now().Unix()
 	if updateErr := run.Update(); updateErr != nil {
 		common.SysLog("update provider checkin run failed: " + updateErr.Error())
+	}
+	if err != nil {
+		NotifyAsync(buildCheckinFailureNotificationEvent(run, item))
+		if item.AutoDisabled {
+			NotifyAsync(buildProviderAutoDisableNotificationEvent(run, item))
+		}
 	}
 
 	if err != nil {

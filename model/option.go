@@ -52,6 +52,7 @@ func InitOptionMap() {
 	common.OptionMap["CheckinScheduleEnabled"] = strconv.FormatBool(common.CheckinScheduleEnabled)
 	common.OptionMap["CheckinScheduleTime"] = common.CheckinScheduleTime
 	common.OptionMap["CheckinScheduleTimezone"] = common.CheckinScheduleTimezone
+	ApplyNotificationOptionDefaults(common.OptionMap)
 	common.OptionMap[BackupEnabledOptionKey] = strconv.FormatBool(defaultBackupEnabled)
 	common.OptionMap[BackupTriggerModeOptionKey] = defaultBackupTriggerMode
 	common.OptionMap[BackupScheduleCronOptionKey] = defaultBackupScheduleCron

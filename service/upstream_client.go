@@ -1,6 +1,7 @@
 package service
 
 import (
+	"NewAPI-Gateway/model"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ type UpstreamClient struct {
 	BaseURL     string
 	AccessToken string
 	UserID      int
+	Provider    *model.Provider
 	HTTPClient  *http.Client
 }
 
@@ -28,6 +30,20 @@ func NewUpstreamClient(baseURL string, accessToken string, userID int) *Upstream
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+func NewUpstreamClientForProvider(provider *model.Provider) (*UpstreamClient, error) {
+	if provider == nil {
+		return NewUpstreamClient("", "", 0), nil
+	}
+	client := NewUpstreamClient(provider.BaseURL, provider.AccessToken, provider.UserID)
+	client.Provider = provider
+	httpClient, err := NewProviderHTTPClient(provider, 30*time.Second)
+	if err != nil {
+		return nil, sanitizeProxyTransportError(provider, err)
+	}
+	client.HTTPClient = httpClient
+	return client, nil
 }
 
 // UpstreamResponse is the standard NewAPI response wrapper
@@ -129,7 +145,10 @@ func (c *UpstreamClient) doRequest(method string, path string) ([]byte, error) {
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &UpstreamRequestError{
+			Message:   sanitizeProviderErrorMessage(c.Provider, err.Error()),
+			Transport: true,
+		}
 	}
 	defer resp.Body.Close()
 
@@ -139,7 +158,10 @@ func (c *UpstreamClient) doRequest(method string, path string) ([]byte, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream returned status %d: %s", resp.StatusCode, string(body))
+		return nil, &UpstreamRequestError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("upstream returned status %d: %s", resp.StatusCode, sanitizeProviderErrorMessage(c.Provider, string(body))),
+		}
 	}
 
 	return body, nil
@@ -162,7 +184,10 @@ func (c *UpstreamClient) doRequestWithBody(method string, path string, payload i
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &UpstreamRequestError{
+			Message:   sanitizeProviderErrorMessage(c.Provider, err.Error()),
+			Transport: true,
+		}
 	}
 	defer resp.Body.Close()
 
@@ -171,7 +196,10 @@ func (c *UpstreamClient) doRequestWithBody(method string, path string, payload i
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream returned status %d: %s", resp.StatusCode, string(body))
+		return nil, &UpstreamRequestError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("upstream returned status %d: %s", resp.StatusCode, sanitizeProviderErrorMessage(c.Provider, string(body))),
+		}
 	}
 	return body, nil
 }
@@ -314,7 +342,10 @@ func (c *UpstreamClient) Checkin() (*CheckinResponse, error) {
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &UpstreamRequestError{
+			Message:   sanitizeProviderErrorMessage(c.Provider, err.Error()),
+			Transport: true,
+		}
 	}
 	defer resp.Body.Close()
 

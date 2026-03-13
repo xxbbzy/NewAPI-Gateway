@@ -168,6 +168,80 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case model.NotificationBarkEnabledOptionKey,
+		model.NotificationBarkServerOptionKey,
+		model.NotificationBarkDeviceKeyOptionKey,
+		model.NotificationBarkGroupOptionKey,
+		model.NotificationWebhookEnabledOptionKey,
+		model.NotificationWebhookURLOptionKey,
+		model.NotificationWebhookTokenOptionKey,
+		model.NotificationSMTPEnabledOptionKey,
+		model.NotificationSMTPRecipientsOptionKey,
+		model.NotificationSMTPSubjectPrefixOptionKey,
+		model.NotificationCheckinSummaryEnabledOptionKey,
+		model.NotificationCheckinFailureEnabledOptionKey,
+		model.NotificationProviderAutoDisableEnabledOptionKey,
+		model.NotificationProviderHealthEnabledOptionKey,
+		model.NotificationRequestFailureEnabledOptionKey,
+		model.NotificationVerbosityModeOptionKey,
+		model.NotificationRequestFailureThresholdOptionKey,
+		model.NotificationRequestFailureWindowMinutesOptionKey:
+		if message, ok := model.ValidateNotificationOption(option.Key, option.Value); ok && message != "" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": message,
+			})
+			return
+		}
+		switch option.Key {
+		case model.NotificationBarkEnabledOptionKey:
+			if strings.EqualFold(strings.TrimSpace(option.Value), "true") {
+				common.OptionMapRWMutex.RLock()
+				server := strings.TrimSpace(common.OptionMap[model.NotificationBarkServerOptionKey])
+				deviceKey := strings.TrimSpace(common.OptionMap[model.NotificationBarkDeviceKeyOptionKey])
+				common.OptionMapRWMutex.RUnlock()
+				if server == "" || deviceKey == "" {
+					c.JSON(http.StatusOK, gin.H{
+						"success": false,
+						"message": "启用 Bark 通知前，请先填写 Bark 服务器地址和设备 Key",
+					})
+					return
+				}
+			}
+		case model.NotificationWebhookEnabledOptionKey:
+			if strings.EqualFold(strings.TrimSpace(option.Value), "true") {
+				common.OptionMapRWMutex.RLock()
+				webhookURL := strings.TrimSpace(common.OptionMap[model.NotificationWebhookURLOptionKey])
+				common.OptionMapRWMutex.RUnlock()
+				if webhookURL == "" {
+					c.JSON(http.StatusOK, gin.H{
+						"success": false,
+						"message": "启用 Webhook 通知前，请先填写 Webhook 地址",
+					})
+					return
+				}
+			}
+		case model.NotificationSMTPEnabledOptionKey:
+			if strings.EqualFold(strings.TrimSpace(option.Value), "true") {
+				common.OptionMapRWMutex.RLock()
+				recipients := strings.TrimSpace(common.OptionMap[model.NotificationSMTPRecipientsOptionKey])
+				common.OptionMapRWMutex.RUnlock()
+				if strings.TrimSpace(common.SMTPServer) == "" || strings.TrimSpace(common.SMTPAccount) == "" || strings.TrimSpace(common.SMTPToken) == "" {
+					c.JSON(http.StatusOK, gin.H{
+						"success": false,
+						"message": "启用邮件通知前，请先完成 SMTP 服务器、账户和访问凭证配置",
+					})
+					return
+				}
+				if recipients == "" {
+					c.JSON(http.StatusOK, gin.H{
+						"success": false,
+						"message": "启用邮件通知前，请先填写通知接收人",
+					})
+					return
+				}
+			}
+		}
 	case "RoutingUsageWindowHours":
 		value, err := strconv.Atoi(strings.TrimSpace(option.Value))
 		if err != nil || value < 1 || value > 24*30 {

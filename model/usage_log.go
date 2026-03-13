@@ -270,6 +270,33 @@ func compareUsageLogAttemptOrder(a *UsageLog, b *UsageLog) int {
 	return 0
 }
 
+func CountFailedUsageLogsSince(providerID int, since int64) (int64, error) {
+	if providerID == 0 {
+		return 0, nil
+	}
+	var count int64
+	err := DB.Model(&UsageLog{}).
+		Where("provider_id = ? AND created_at >= ? AND (status <> 1 OR (error_message IS NOT NULL AND TRIM(error_message) <> ''))", providerID, since).
+		Count(&count).Error
+	return count, err
+}
+
+func GetRecentFailedUsageLogsSince(providerID int, since int64, limit int) ([]*UsageLog, error) {
+	if providerID == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	var logs []*UsageLog
+	err := DB.
+		Where("provider_id = ? AND created_at >= ? AND (status <> 1 OR (error_message IS NOT NULL AND TRIM(error_message) <> ''))", providerID, since).
+		Order("id desc").
+		Limit(limit).
+		Find(&logs).Error
+	return logs, err
+}
+
 func selectRequestRepresentative(attempts []*UsageLog) *UsageLog {
 	var bestSuccess *UsageLog
 	var bestAny *UsageLog

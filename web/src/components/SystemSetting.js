@@ -28,6 +28,24 @@ const SystemSetting = () => {
     CheckinScheduleEnabled: 'true',
     CheckinScheduleTime: '09:00',
     CheckinScheduleTimezone: 'Asia/Shanghai',
+    NotificationBarkEnabled: 'false',
+    NotificationBarkServer: '',
+    NotificationBarkDeviceKey: '',
+    NotificationBarkGroup: '',
+    NotificationWebhookEnabled: 'false',
+    NotificationWebhookURL: '',
+    NotificationWebhookToken: '',
+    NotificationSMTPEnabled: 'false',
+    NotificationSMTPRecipients: '',
+    NotificationSMTPSubjectPrefix: '[NewAPI Gateway]',
+    NotificationCheckinSummaryEnabled: 'false',
+    NotificationCheckinFailureEnabled: 'true',
+    NotificationProviderAutoDisableEnabled: 'true',
+    NotificationProviderHealthEnabled: 'true',
+    NotificationRequestFailureEnabled: 'false',
+    NotificationVerbosityMode: 'concise',
+    NotificationRequestFailureThreshold: '5',
+    NotificationRequestFailureWindowMinutes: '10',
     RoutingUsageWindowHours: '24',
     RoutingBaseWeightFactor: '0.2',
     RoutingValueScoreFactor: '0.8',
@@ -122,40 +140,48 @@ const SystemSetting = () => {
 
   const updateOption = async (key, value) => {
     setLoading(true);
-    switch (key) {
-      case 'PasswordLoginEnabled':
-      case 'PasswordRegisterEnabled':
-      case 'EmailVerificationEnabled':
-      case 'GitHubOAuthEnabled':
-      case 'TurnstileCheckEnabled':
-      case 'RegisterEnabled':
-      case 'CheckinScheduleEnabled':
-      case 'RoutingHealthAdjustmentEnabled':
-      case 'BackupEnabled':
-      case 'BackupEncryptEnabled':
-        value = inputs[key] === 'true' ? 'false' : 'true';
-        break;
-      default:
-        break;
-    }
-    const res = await API.put('/api/option/', {
-      key,
-      value,
-    });
-    const { success, message } = res.data;
-    if (success) {
-      setInputs((current) => ({ ...current, [key]: value }));
-      setOriginInputs((current) => ({ ...current, [key]: value }));
-    } else {
+    try {
+      switch (key) {
+        case 'PasswordLoginEnabled':
+        case 'PasswordRegisterEnabled':
+        case 'EmailVerificationEnabled':
+        case 'GitHubOAuthEnabled':
+        case 'TurnstileCheckEnabled':
+        case 'RegisterEnabled':
+        case 'CheckinScheduleEnabled':
+        case 'RoutingHealthAdjustmentEnabled':
+        case 'BackupEnabled':
+        case 'BackupEncryptEnabled':
+          value = inputs[key] === 'true' ? 'false' : 'true';
+          break;
+        default:
+          break;
+      }
+      const res = await API.put('/api/option/', {
+        key,
+        value,
+      });
+      const { success, message } = res.data;
+      if (success) {
+        setInputs((current) => ({ ...current, [key]: value }));
+        setOriginInputs((current) => ({ ...current, [key]: value }));
+        return true;
+      }
       showError(message);
+      return false;
+    } catch (error) {
+      showError(error);
+      return false;
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleInputChange = async (e) => {
     const { name, value } = e.target;
     if (
       name === 'Notice' ||
+      name.startsWith('Notification') ||
       name.startsWith('SMTP') ||
       name === 'ServerAddress' ||
       name === 'GitHubClientId' ||
@@ -197,6 +223,13 @@ const SystemSetting = () => {
     } else {
       await updateOption(name, value);
     }
+  };
+
+  const handleStagedCheckboxChange = (name) => {
+    setInputs((current) => ({
+      ...current,
+      [name]: current[name] === 'true' ? 'false' : 'true',
+    }));
   };
 
   const loginMethodGuardMessage = '至少保留一种登录方式（密码登录或 GitHub 登录）';
@@ -415,6 +448,82 @@ const SystemSetting = () => {
     }
     await getBackupOverview();
     showSuccess('备份设置已保存');
+  };
+
+  const submitNotificationSettings = async () => {
+    const rawThreshold = Number.parseInt(String(inputs.NotificationRequestFailureThreshold || '').trim(), 10);
+    const rawWindowMinutes = Number.parseInt(String(inputs.NotificationRequestFailureWindowMinutes || '').trim(), 10);
+    const verbosityMode = String(inputs.NotificationVerbosityMode || '').trim().toLowerCase();
+
+    if (verbosityMode !== 'concise' && verbosityMode !== 'detailed') {
+      showError('通知详细度必须是 concise 或 detailed');
+      return;
+    }
+    if (!Number.isInteger(rawThreshold) || rawThreshold < 1 || rawThreshold > 1000) {
+      showError('请求失败告警阈值必须是 1 到 1000 的整数');
+      return;
+    }
+    if (!Number.isInteger(rawWindowMinutes) || rawWindowMinutes < 1 || rawWindowMinutes > 1440) {
+      showError('请求失败统计窗口必须是 1 到 1440 分钟的整数');
+      return;
+    }
+
+    const nextValues = {
+      NotificationBarkEnabled: inputs.NotificationBarkEnabled === 'true' ? 'true' : 'false',
+      NotificationBarkServer: String(inputs.NotificationBarkServer || '').trim(),
+      NotificationBarkDeviceKey: String(inputs.NotificationBarkDeviceKey || '').trim(),
+      NotificationBarkGroup: String(inputs.NotificationBarkGroup || '').trim(),
+      NotificationWebhookEnabled: inputs.NotificationWebhookEnabled === 'true' ? 'true' : 'false',
+      NotificationWebhookURL: String(inputs.NotificationWebhookURL || '').trim(),
+      NotificationWebhookToken: String(inputs.NotificationWebhookToken || '').trim(),
+      NotificationSMTPEnabled: inputs.NotificationSMTPEnabled === 'true' ? 'true' : 'false',
+      NotificationSMTPRecipients: String(inputs.NotificationSMTPRecipients || '').trim(),
+      NotificationSMTPSubjectPrefix: String(inputs.NotificationSMTPSubjectPrefix || '').trim(),
+      NotificationCheckinSummaryEnabled: inputs.NotificationCheckinSummaryEnabled === 'true' ? 'true' : 'false',
+      NotificationCheckinFailureEnabled: inputs.NotificationCheckinFailureEnabled === 'true' ? 'true' : 'false',
+      NotificationProviderAutoDisableEnabled: inputs.NotificationProviderAutoDisableEnabled === 'true' ? 'true' : 'false',
+      NotificationProviderHealthEnabled: inputs.NotificationProviderHealthEnabled === 'true' ? 'true' : 'false',
+      NotificationRequestFailureEnabled: inputs.NotificationRequestFailureEnabled === 'true' ? 'true' : 'false',
+      NotificationVerbosityMode: verbosityMode,
+      NotificationRequestFailureThreshold: String(rawThreshold),
+      NotificationRequestFailureWindowMinutes: String(rawWindowMinutes),
+    };
+    const protectedKeys = new Set(['NotificationBarkDeviceKey', 'NotificationWebhookURL', 'NotificationWebhookToken']);
+
+    const orderedKeys = [
+      'NotificationBarkServer',
+      'NotificationBarkDeviceKey',
+      'NotificationBarkGroup',
+      'NotificationWebhookURL',
+      'NotificationWebhookToken',
+      'NotificationSMTPRecipients',
+      'NotificationSMTPSubjectPrefix',
+      'NotificationVerbosityMode',
+      'NotificationRequestFailureThreshold',
+      'NotificationRequestFailureWindowMinutes',
+      'NotificationCheckinSummaryEnabled',
+      'NotificationCheckinFailureEnabled',
+      'NotificationProviderAutoDisableEnabled',
+      'NotificationProviderHealthEnabled',
+      'NotificationRequestFailureEnabled',
+      'NotificationBarkEnabled',
+      'NotificationWebhookEnabled',
+      'NotificationSMTPEnabled',
+    ];
+
+    for (const key of orderedKeys) {
+      const nextValue = nextValues[key];
+      if (protectedKeys.has(key) && nextValue === '') {
+        continue;
+      }
+      if (originInputs[key] !== nextValue) {
+        const updated = await updateOption(key, nextValue);
+        if (!updated) {
+          return;
+        }
+      }
+    }
+    showSuccess('通知设置已保存');
   };
 
   const triggerManualBackup = async () => {
@@ -781,6 +890,56 @@ const SystemSetting = () => {
               <Input label='签到时区（IANA）' name='CheckinScheduleTimezone' onChange={handleInputChange} value={inputs.CheckinScheduleTimezone} placeholder='Asia/Shanghai' />
             </div>
             <Button onClick={submitCheckinSchedule} variant="secondary" disabled={loading}>保存签到任务设置</Button>
+          </Card>
+
+          <Card padding="1.5rem">
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>运营通知</h3>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+              配置 Bark、Webhook、邮件通知以及事件订阅规则。邮件通道会复用下方 SMTP 凭证。
+            </p>
+            <div style={{ marginBottom: '1rem', fontWeight: 600, color: 'var(--text-primary)' }}>通知通道</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.5rem', marginBottom: '1rem' }}>
+              <Checkbox checked={inputs.NotificationBarkEnabled === 'true'} label='启用 Bark 推送' name='NotificationBarkEnabled' onChange={handleStagedCheckboxChange} />
+              <Checkbox checked={inputs.NotificationWebhookEnabled === 'true'} label='启用 Webhook 推送' name='NotificationWebhookEnabled' onChange={handleStagedCheckboxChange} />
+              <Checkbox checked={inputs.NotificationSMTPEnabled === 'true'} label='启用邮件推送' name='NotificationSMTPEnabled' onChange={handleStagedCheckboxChange} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+              <Input label='Bark 服务器地址' name='NotificationBarkServer' onChange={handleInputChange} value={inputs.NotificationBarkServer} placeholder='https://api.day.app' />
+              <Input label='Bark 设备 Key' name='NotificationBarkDeviceKey' type='password' onChange={handleInputChange} value={inputs.NotificationBarkDeviceKey} placeholder='留空则保持现有配置' />
+              <Input label='Bark 分组（可选）' name='NotificationBarkGroup' onChange={handleInputChange} value={inputs.NotificationBarkGroup} placeholder='gateway-alerts' />
+              <Input label='Webhook 地址' name='NotificationWebhookURL' type='password' onChange={handleInputChange} value={inputs.NotificationWebhookURL} placeholder='留空则保持现有配置' />
+              <Input label='Webhook Token（可选）' name='NotificationWebhookToken' type='password' onChange={handleInputChange} value={inputs.NotificationWebhookToken} placeholder='留空则保持现有配置' />
+              <Input label='通知收件人' name='NotificationSMTPRecipients' onChange={handleInputChange} value={inputs.NotificationSMTPRecipients} placeholder='ops@example.com;oncall@example.com' />
+              <Input label='邮件标题前缀' name='NotificationSMTPSubjectPrefix' onChange={handleInputChange} value={inputs.NotificationSMTPSubjectPrefix} placeholder='[NewAPI Gateway]' />
+            </div>
+
+            <div style={{ borderTop: '1px dashed var(--border-color)', margin: '1rem 0' }}></div>
+            <div style={{ marginBottom: '1rem', fontWeight: 600, color: 'var(--text-primary)' }}>事件订阅与降噪</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.5rem', marginBottom: '1rem' }}>
+              <Checkbox checked={inputs.NotificationCheckinSummaryEnabled === 'true'} label='签到任务汇总通知' name='NotificationCheckinSummaryEnabled' onChange={handleStagedCheckboxChange} />
+              <Checkbox checked={inputs.NotificationCheckinFailureEnabled === 'true'} label='供应商签到失败通知' name='NotificationCheckinFailureEnabled' onChange={handleStagedCheckboxChange} />
+              <Checkbox checked={inputs.NotificationProviderAutoDisableEnabled === 'true'} label='签到自动停用通知' name='NotificationProviderAutoDisableEnabled' onChange={handleStagedCheckboxChange} />
+              <Checkbox checked={inputs.NotificationProviderHealthEnabled === 'true'} label='供应商不可达/恢复通知' name='NotificationProviderHealthEnabled' onChange={handleStagedCheckboxChange} />
+              <Checkbox checked={inputs.NotificationRequestFailureEnabled === 'true'} label='请求失败阈值告警' name='NotificationRequestFailureEnabled' onChange={handleStagedCheckboxChange} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+              <div>
+                <label htmlFor='NotificationVerbosityMode' style={{ display: 'block', fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>通知详细度</label>
+                <select
+                  id='NotificationVerbosityMode'
+                  name='NotificationVerbosityMode'
+                  onChange={handleInputChange}
+                  value={inputs.NotificationVerbosityMode}
+                  style={{ width: '100%', padding: '0.625rem 0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                >
+                  <option value='concise'>concise</option>
+                  <option value='detailed'>detailed</option>
+                </select>
+              </div>
+              <Input label='请求失败阈值' type='number' name='NotificationRequestFailureThreshold' onChange={handleInputChange} value={inputs.NotificationRequestFailureThreshold} min='1' max='1000' step='1' />
+              <Input label='统计窗口（分钟）' type='number' name='NotificationRequestFailureWindowMinutes' onChange={handleInputChange} value={inputs.NotificationRequestFailureWindowMinutes} min='1' max='1440' step='1' />
+            </div>
+            <Button onClick={submitNotificationSettings} variant="secondary" disabled={loading}>保存通知设置</Button>
           </Card>
 
           <Card padding="1.5rem">

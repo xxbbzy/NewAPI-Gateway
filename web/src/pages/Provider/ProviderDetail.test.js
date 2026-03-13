@@ -150,4 +150,54 @@ describe('ProviderDetail token group form', () => {
 
     expect(container.textContent).toContain('在上游创建令牌');
   });
+
+  it('keeps site health driven by health_status while showing checkin result separately', async () => {
+    API.get.mockImplementation((url) => {
+      if (url === '/api/provider/1') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              id: 1,
+              name: 'Provider-A',
+              base_url: 'https://example.com',
+              status: 1,
+              checkin_enabled: true,
+              weight: 10,
+              priority: 0,
+              balance: '$0.00',
+              balance_updated: 1730000001,
+              health_status: 'healthy',
+              health_success_at: 1730000000,
+              last_checkin_at: 1730000002,
+              last_checkin_status: 'failed',
+            },
+          },
+        });
+      }
+      if (url === '/api/provider/1/tokens') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      if (url === '/api/provider/1/pricing') {
+        return Promise.resolve({ data: { success: true, data: [], group_ratio: {}, token_group_options: [], default_group: '', supported_endpoint: {} } });
+      }
+      if (url === '/api/provider/1/model-alias-mapping') {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      return Promise.resolve({ data: { success: true, data: [] } });
+    });
+
+    await act(async () => {
+      root.render(<ProviderDetail />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(container.textContent).toContain('站点健康');
+    expect(container.textContent).toContain('可访问');
+    expect(container.textContent).toContain('最近成功：ts:1730000000');
+    expect(container.textContent).toContain('签到');
+    expect(container.textContent).toContain('最近结果：failed');
+    expect(container.textContent).not.toContain('不可用');
+  });
 });

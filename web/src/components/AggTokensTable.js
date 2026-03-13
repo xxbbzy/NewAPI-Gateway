@@ -6,7 +6,7 @@ import {
     Copy,
     Search
 } from 'lucide-react';
-import { API, normalizePaginatedData, showError, showSuccess } from '../helpers';
+import { API, copy, normalizePaginatedData, showError, showSuccess } from '../helpers';
 import { ITEMS_PER_PAGE } from '../constants';
 import { Table, Thead, Tbody, Tr, Th, Td } from './ui/Table';
 import Button from './ui/Button';
@@ -140,6 +140,20 @@ const AggTokensTable = () => {
         setActivePage(nextPage);
     };
 
+    const copyToken = async (tokenKey) => {
+        const fullToken = `ag-${tokenKey || ''}`;
+        if (!tokenKey) {
+            showError('复制失败：令牌无效');
+            return;
+        }
+        const okay = await copy(fullToken);
+        if (okay) {
+            showSuccess('已复制');
+            return;
+        }
+        showError('复制失败：剪贴板不可用或权限被拒绝');
+    };
+
     return (
         <>
             <Card padding="0">
@@ -195,10 +209,7 @@ const AggTokensTable = () => {
                                                     size="sm"
                                                     variant="ghost"
                                                     icon={Copy}
-                                                    onClick={() => {
-                                                        navigator.clipboard.writeText('ag-' + t.key);
-                                                        showSuccess('已复制');
-                                                    }}
+                                                    onClick={() => copyToken(t.key)}
                                                 />
                                             </div>
                                         </Td>

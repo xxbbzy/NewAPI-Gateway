@@ -50,6 +50,24 @@ describe('SystemSetting', () => {
     CheckinScheduleEnabled: 'true',
     CheckinScheduleTime: '09:00',
     CheckinScheduleTimezone: 'Asia/Shanghai',
+    NotificationBarkEnabled: 'false',
+    NotificationBarkServer: '',
+    NotificationBarkDeviceKey: '',
+    NotificationBarkGroup: '',
+    NotificationWebhookEnabled: 'false',
+    NotificationWebhookURL: '',
+    NotificationWebhookToken: '',
+    NotificationSMTPEnabled: 'false',
+    NotificationSMTPRecipients: '',
+    NotificationSMTPSubjectPrefix: '[NewAPI Gateway]',
+    NotificationCheckinSummaryEnabled: 'false',
+    NotificationCheckinFailureEnabled: 'true',
+    NotificationProviderAutoDisableEnabled: 'true',
+    NotificationProviderHealthEnabled: 'true',
+    NotificationRequestFailureEnabled: 'false',
+    NotificationVerbosityMode: 'concise',
+    NotificationRequestFailureThreshold: '5',
+    NotificationRequestFailureWindowMinutes: '10',
     RoutingUsageWindowHours: '24',
     RoutingBaseWeightFactor: '0.2',
     RoutingValueScoreFactor: '0.8',
@@ -104,6 +122,27 @@ describe('SystemSetting', () => {
       }
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flushPromises();
+    await flushPromises();
+  };
+
+  const setSelectValue = async (selector, value) => {
+    const select = container.querySelector(selector);
+    expect(select).not.toBeNull();
+    await act(async () => {
+      const previousValue = select.value;
+      const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
+      if (valueSetter) {
+        valueSetter.call(select, value);
+      } else {
+        select.value = value;
+      }
+      const tracker = select._valueTracker;
+      if (tracker) {
+        tracker.setValue(previousValue);
+      }
+      select.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await flushPromises();
     await flushPromises();
@@ -526,5 +565,124 @@ describe('SystemSetting', () => {
       run_id: 302,
       dry_run: true,
     });
+  });
+
+  it('renders notification settings and submits channel configuration changes', async () => {
+    await act(async () => {
+      root.render(<SystemSetting />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const advancedDetails = container.querySelector('details#advanced-settings');
+    await act(async () => {
+      advancedDetails.open = true;
+      advancedDetails.dispatchEvent(new Event('toggle', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('运营通知');
+
+    const smtpNotificationToggle = container.querySelector('input#NotificationSMTPEnabled');
+    expect(smtpNotificationToggle).not.toBeNull();
+    await act(async () => {
+      smtpNotificationToggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    await setInputValue('input[name="NotificationSMTPRecipients"]', 'ops@example.com;oncall@example.com');
+    await setInputValue('input[name="NotificationSMTPSubjectPrefix"]', '[Ops Alerts]');
+
+    API.put.mockClear();
+    const saveButton = findButton('保存通知设置');
+    await act(async () => {
+      saveButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(API.put).toHaveBeenCalledWith('/api/option/', {
+      key: 'NotificationSMTPRecipients',
+      value: 'ops@example.com;oncall@example.com',
+    });
+    expect(API.put).toHaveBeenCalledWith('/api/option/', {
+      key: 'NotificationSMTPSubjectPrefix',
+      value: '[Ops Alerts]',
+    });
+    expect(API.put).toHaveBeenCalledWith('/api/option/', {
+      key: 'NotificationSMTPEnabled',
+      value: 'true',
+    });
+
+    const recipientsCall = API.put.mock.calls.findIndex(([url, payload]) =>
+      url === '/api/option/' && payload?.key === 'NotificationSMTPRecipients'
+    );
+    const enabledCall = API.put.mock.calls.findIndex(([url, payload]) =>
+      url === '/api/option/' && payload?.key === 'NotificationSMTPEnabled'
+    );
+    expect(recipientsCall).toBeGreaterThanOrEqual(0);
+    expect(enabledCall).toBeGreaterThanOrEqual(0);
+    expect(recipientsCall).toBeLessThan(enabledCall);
+  });
+
+  it('submits notification policy verbosity and request-failure thresholds', async () => {
+    await act(async () => {
+      root.render(<SystemSetting />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const advancedDetails = container.querySelector('details#advanced-settings');
+    await act(async () => {
+      advancedDetails.open = true;
+      advancedDetails.dispatchEvent(new Event('toggle', { bubbles: true }));
+    });
+
+    const requestFailureToggle = container.querySelector('input#NotificationRequestFailureEnabled');
+    await act(async () => {
+      requestFailureToggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    await setSelectValue('select[name="NotificationVerbosityMode"]', 'detailed');
+    await setInputValue('input[name="NotificationRequestFailureThreshold"]', '8');
+    await setInputValue('input[name="NotificationRequestFailureWindowMinutes"]', '15');
+
+    API.put.mockClear();
+    const saveButton = findButton('保存通知设置');
+    await act(async () => {
+      saveButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(API.put).toHaveBeenCalledWith('/api/option/', {
+      key: 'NotificationVerbosityMode',
+      value: 'detailed',
+    });
+    expect(API.put).toHaveBeenCalledWith('/api/option/', {
+      key: 'NotificationRequestFailureThreshold',
+      value: '8',
+    });
+    expect(API.put).toHaveBeenCalledWith('/api/option/', {
+      key: 'NotificationRequestFailureWindowMinutes',
+      value: '15',
+    });
+    expect(API.put).toHaveBeenCalledWith('/api/option/', {
+      key: 'NotificationRequestFailureEnabled',
+      value: 'true',
+    });
+
+    const modeCall = API.put.mock.calls.findIndex(([url, payload]) =>
+      url === '/api/option/' && payload?.key === 'NotificationVerbosityMode'
+    );
+    const thresholdCall = API.put.mock.calls.findIndex(([url, payload]) =>
+      url === '/api/option/' && payload?.key === 'NotificationRequestFailureThreshold'
+    );
+    const enabledCall = API.put.mock.calls.findIndex(([url, payload]) =>
+      url === '/api/option/' && payload?.key === 'NotificationRequestFailureEnabled'
+    );
+    expect(modeCall).toBeGreaterThanOrEqual(0);
+    expect(thresholdCall).toBeGreaterThanOrEqual(0);
+    expect(enabledCall).toBeGreaterThanOrEqual(0);
+    expect(modeCall).toBeLessThan(enabledCall);
+    expect(thresholdCall).toBeLessThan(enabledCall);
   });
 });

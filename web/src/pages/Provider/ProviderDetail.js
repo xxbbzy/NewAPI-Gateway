@@ -190,6 +190,17 @@ const ProviderDetail = () => {
         return <Badge color="red">禁用</Badge>;
     };
 
+    const renderProviderHealth = (currentProvider) => {
+        const status = String(currentProvider?.health_status || '').trim();
+        if (currentProvider?.health_blocked || status === 'unreachable') {
+            return <Badge color="red">不可用</Badge>;
+        }
+        if (status === 'healthy') {
+            return <Badge color="green">可访问</Badge>;
+        }
+        return <Badge color="gray">未知</Badge>;
+    };
+
     const formatTime = (timestamp) => {
         if (!timestamp) return '无';
         return timestamp2string(timestamp);
@@ -766,6 +777,29 @@ const ProviderDetail = () => {
                         <div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>余额</div>
                             <div style={{ fontWeight: '600' }}>{provider.balance || '无'}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                                上次更新：{formatTime(provider.balance_updated)}
+                            </div>
+                        </div>
+                        <div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>站点健康</div>
+                            {renderProviderHealth(provider)}
+                            {provider.health_failure_at ? (
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                                    最近失败：{formatTime(provider.health_failure_at)}
+                                </div>
+                            ) : (
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                                    最近成功：{formatTime(provider.health_success_at)}
+                                </div>
+                            )}
+                        </div>
+                        <div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>站点代理</div>
+                            {provider.proxy_enabled ? <Badge color="orange">已启用</Badge> : <Badge color="gray">未启用</Badge>}
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem', maxWidth: '220px' }}>
+                                {provider.proxy_url_redacted || '直连'}
+                            </div>
                         </div>
                         <div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>权重 / 优先级</div>
@@ -801,6 +835,11 @@ const ProviderDetail = () => {
                 {provider.remark && (
                     <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: 'var(--gray-50)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
                         {provider.remark}
+                    </div>
+                )}
+                {provider.health_failure_reason && (
+                    <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                        最近失败原因：{provider.health_failure_reason}
                     </div>
                 )}
             </Card>

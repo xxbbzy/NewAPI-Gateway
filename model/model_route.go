@@ -302,6 +302,7 @@ func BuildRouteAttemptsByPriority(modelName string) ([][]RouteAttempt, error) {
 		routes := routesByPriority[priority]
 		attempts := make([]RouteAttempt, 0, len(routes))
 		maxScore := 0.0
+		now := time.Now()
 		for _, route := range routes {
 			provider := providerLookup[route.ProviderId]
 			token := tokenLookup[route.ProviderTokenId]
@@ -309,6 +310,9 @@ func BuildRouteAttemptsByPriority(modelName string) ([][]RouteAttempt, error) {
 				continue
 			}
 			if provider.Status != common.UserStatusEnabled || token.Status != common.UserStatusEnabled {
+				continue
+			}
+			if !provider.CanParticipateInAutomatedUseAt(now) {
 				continue
 			}
 			metric := metricLookup[route.Id]
@@ -440,7 +444,7 @@ func loadProvidersByIDs(providerIds []int) (map[int]*Provider, error) {
 
 	if len(missingIds) > 0 {
 		var providers []Provider
-		if err := DB.Where("id IN ?", missingIds).Find(&providers).Error; err != nil {
+		if err := applyProviderReadProjection(DB).Where("id IN ?", missingIds).Find(&providers).Error; err != nil {
 			return nil, err
 		}
 		for i := range providers {

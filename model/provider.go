@@ -3,6 +3,8 @@ package model
 import (
 	"NewAPI-Gateway/common"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -21,12 +23,23 @@ type Provider struct {
 	LastCheckinAt            int64  `json:"last_checkin_at"`
 	Balance                  string `json:"balance"`
 	BalanceUpdated           int64  `json:"balance_updated"`
+	HealthStatus             string `json:"health_status" gorm:"type:varchar(32);default:'unknown';index"`
+	HealthCheckAt            int64  `json:"health_check_at"`
+	HealthSuccessAt          int64  `json:"health_success_at"`
+	HealthFailureAt          int64  `json:"health_failure_at"`
+	HealthFailureReason      string `json:"health_failure_reason" gorm:"type:text"`
+	HealthCooldownUntil      int64  `json:"health_cooldown_until"`
+	ProxyEnabled             bool   `json:"proxy_enabled"`
+	ProxyURL                 string `json:"proxy_url" gorm:"type:text"`
 	PricingGroupRatio        string `json:"pricing_group_ratio" gorm:"type:text"`
 	PricingUsableGroup       string `json:"pricing_usable_group" gorm:"type:text"`
 	PricingSupportedEndpoint string `json:"pricing_supported_endpoint" gorm:"type:text"`
 	ModelAliasMapping        string `json:"model_alias_mapping" gorm:"type:text"`
 	Remark                   string `json:"remark" gorm:"type:text"`
 	CreatedAt                int64  `json:"created_at"`
+	HealthBlocked            bool   `json:"health_blocked" gorm:"-"`
+	BalanceFreshness         string `json:"balance_freshness" gorm:"-"`
+	ProxyURLRedacted         string `json:"proxy_url_redacted" gorm:"-"`
 	LastCheckinStatus        string `json:"last_checkin_status" gorm:"-"`
 	LastCheckinMessage       string `json:"last_checkin_message" gorm:"-"`
 	LastCheckinQuotaAwarded  int64  `json:"last_checkin_quota_awarded" gorm:"-"`
@@ -52,6 +65,14 @@ CAST(checkin_enabled AS INTEGER) AS checkin_enabled,
 CAST(last_checkin_at AS INTEGER) AS last_checkin_at,
 balance,
 CAST(balance_updated AS INTEGER) AS balance_updated,
+health_status,
+CAST(health_check_at AS INTEGER) AS health_check_at,
+CAST(health_success_at AS INTEGER) AS health_success_at,
+CAST(health_failure_at AS INTEGER) AS health_failure_at,
+health_failure_reason,
+CAST(health_cooldown_until AS INTEGER) AS health_cooldown_until,
+CAST(proxy_enabled AS INTEGER) AS proxy_enabled,
+proxy_url,
 pricing_group_ratio,
 pricing_usable_group,
 pricing_supported_endpoint,
@@ -66,7 +87,7 @@ func GetAllProviders(startIdx int, num int) ([]*Provider, error) {
 	return providers, err
 }
 
-func QueryProviders(startIdx int, num int) ([]*Provider, int64, error) {
+func QueryProviders(keyword string, startIdx int, num int) ([]*Provider, int64, error) {
 	if startIdx < 0 {
 		startIdx = 0
 	}
@@ -75,13 +96,33 @@ func QueryProviders(startIdx int, num int) ([]*Provider, int64, error) {
 	}
 
 	base := DB.Model(&Provider{})
+	keyword = strings.TrimSpace(keyword)
+	if keyword != "" {
+		pattern := "%" + keyword + "%"
+		if userID, err := strconv.Atoi(keyword); err == nil {
+			base = base.Where(
+				"name LIKE ? OR base_url LIKE ? OR remark LIKE ? OR user_id = ?",
+				pattern,
+				pattern,
+				pattern,
+				userID,
+			)
+		} else {
+			base = base.Where(
+				"name LIKE ? OR base_url LIKE ? OR remark LIKE ?",
+				pattern,
+				pattern,
+				pattern,
+			)
+		}
+	}
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	var providers []*Provider
-	err := applyProviderReadProjection(DB).Order("id desc").Limit(num).Offset(startIdx).Find(&providers).Error
+	err := applyProviderReadProjection(base).Order("id desc").Limit(num).Offset(startIdx).Find(&providers).Error
 	return providers, total, err
 }
 
@@ -100,10 +141,22 @@ func GetEnabledProviders() ([]*Provider, error) {
 	return providers, err
 }
 
+func GetAutomatedSyncProviders() ([]*Provider, error) {
+	var providers []*Provider
+	err := applyProviderReadProjection(DB).Where("status = ?", common.UserStatusEnabled).Find(&providers).Error
+	if err != nil {
+		return nil, err
+	}
+	return filterAutomatedUsableProviders(providers), nil
+}
+
 func GetCheckinEnabledProviders() ([]*Provider, error) {
 	var providers []*Provider
 	err := applyProviderReadProjection(DB).Where("status = ? AND checkin_enabled = ?", common.UserStatusEnabled, true).Find(&providers).Error
-	return providers, err
+	if err != nil {
+		return nil, err
+	}
+	return filterAutomatedUsableProviders(providers), nil
 }
 
 func GetUncheckinProviders(dayStart int64) ([]*Provider, error) {
@@ -114,11 +167,17 @@ func GetUncheckinProviders(dayStart int64) ([]*Provider, error) {
 		true,
 		dayStart,
 	).Order("id desc").Find(&providers).Error
-	return providers, err
+	if err != nil {
+		return nil, err
+	}
+	return filterAutomatedUsableProviders(providers), nil
 }
 
 func (p *Provider) Insert() error {
 	p.CreatedAt = time.Now().Unix()
+	if strings.TrimSpace(p.HealthStatus) == "" {
+		p.HealthStatus = ProviderHealthStatusUnknown
+	}
 	return DB.Create(p).Error
 }
 
@@ -197,7 +256,13 @@ func (p *Provider) UpdateCheckinEnabled(enabled bool) error {
 
 // CleanForResponse removes sensitive fields before sending to frontend
 func (p *Provider) CleanForResponse() {
+	now := time.Now()
 	p.AccessToken = ""
+	p.ProxyURLRedacted = RedactProxyURL(p.ProxyURL)
+	p.ProxyURL = ""
+	p.HealthStatus = normalizeProviderHealthStatus(p.HealthStatus)
+	p.HealthBlocked = p.IsHealthBlockedAt(now)
+	p.BalanceFreshness = p.BalanceFreshnessAt(now)
 }
 
 // FindProviderByBaseURLAndUserID finds a provider by base_url + user_id combination.

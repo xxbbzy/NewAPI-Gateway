@@ -20,15 +20,6 @@ import (
 	"github.com/google/uuid"
 )
 
-var proxyHTTPClient = &http.Client{
-	Timeout: 5 * time.Minute,
-	Transport: &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 20,
-		IdleConnTimeout:     90 * time.Second,
-	},
-}
-
 type ProxyAttemptError struct {
 	StatusCode      int
 	Message         string
@@ -124,9 +115,9 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 	req.Header.Del("Forwarded")
 
 	// 9. Send request
-	resp, err := proxyHTTPClient.Do(req)
-	if err != nil {
-		errorMsg := buildErrorMessage(err.Error(), c, bodyBytes)
+	httpClient, clientErr := getRelayHTTPClientForProvider(provider)
+	if clientErr != nil {
+		errorMsg := buildErrorMessage(sanitizeProviderErrorMessage(provider, clientErr.Error()), c, bodyBytes)
 		logProxyErrorTrace(c, requestId, provider, token, errorMsg)
 		logUsage(
 			aggToken,
@@ -143,9 +134,41 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 			"",
 			0,
 		)
+		if reason, ok := classifyProviderReachabilityError(clientErr); ok {
+			markProviderHealthFailure(provider, reason)
+		}
 		return &ProxyAttemptError{
 			StatusCode:      http.StatusBadGateway,
-			Message:         "upstream request failed: " + err.Error(),
+			Message:         sanitizeProviderErrorMessage(provider, clientErr.Error()),
+			Retryable:       true,
+			FailureCategory: model.UsageFailureCategoryTransport,
+		}
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		sanitizedErr := sanitizeProviderErrorMessage(provider, err.Error())
+		errorMsg := buildErrorMessage(sanitizedErr, c, bodyBytes)
+		logProxyErrorTrace(c, requestId, provider, token, errorMsg)
+		logUsage(
+			aggToken,
+			provider,
+			token,
+			c,
+			requestId,
+			usageMetrics{ModelName: getContextModelName(c)},
+			false,
+			0,
+			0,
+			errorMsg,
+			model.UsageFailureCategoryTransport,
+			"",
+			0,
+		)
+		markProviderHealthFailure(provider, sanitizedErr)
+		return &ProxyAttemptError{
+			StatusCode:      http.StatusBadGateway,
+			Message:         "upstream request failed: " + sanitizedErr,
 			Retryable:       true,
 			FailureCategory: model.UsageFailureCategoryTransport,
 		}
@@ -195,6 +218,9 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 			"",
 			resp.StatusCode,
 		)
+		if isProviderReachabilityStatus(resp.StatusCode) {
+			markProviderHealthFailure(provider, errorMsg)
+		}
 		return &ProxyAttemptError{
 			StatusCode:      resp.StatusCode,
 			Message:         errorMsg,
@@ -203,13 +229,25 @@ func ProxyToUpstream(c *gin.Context, token *model.ProviderToken, provider *model
 		}
 	}
 	if isStream {
-		return proxyStreamResponse(
+		proxyErr := proxyStreamResponse(
 			c, resp, aggToken, provider, token, requestId, bodyBytes, startTime, validateResponse, enforceResponse,
 		)
+		if proxyErr == nil {
+			markProviderHealthSuccess(provider)
+		} else if reason, ok := classifyProviderReachabilityProxyError(proxyErr); ok {
+			markProviderHealthFailure(provider, reason)
+		}
+		return proxyErr
 	}
-	return proxyNonStreamResponse(
+	proxyErr := proxyNonStreamResponse(
 		c, resp, aggToken, provider, token, requestId, bodyBytes, startTime, validateResponse, enforceResponse,
 	)
+	if proxyErr == nil {
+		markProviderHealthSuccess(provider)
+	} else if reason, ok := classifyProviderReachabilityProxyError(proxyErr); ok {
+		markProviderHealthFailure(provider, reason)
+	}
+	return proxyErr
 }
 
 type responseValidationResult struct {
@@ -906,7 +944,9 @@ func logUsage(aggToken *model.AggregatedToken, provider *model.Provider, token *
 	go func() {
 		if err := log.Insert(); err != nil {
 			common.SysLog(fmt.Sprintf("failed to insert usage log: %v", err))
+			return
 		}
+		EvaluateRequestFailureAlert(log)
 	}()
 }
 
