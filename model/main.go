@@ -162,6 +162,10 @@ func InitDB() (err error) {
 		if err != nil {
 			return err
 		}
+		err = db.AutoMigrate(&NotificationAlertState{})
+		if err != nil {
+			return err
+		}
 		err = db.AutoMigrate(&BackupRun{})
 		if err != nil {
 			return err

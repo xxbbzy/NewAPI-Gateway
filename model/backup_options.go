@@ -126,6 +126,9 @@ func ValidateBackupOption(key string, value string) (string, bool) {
 }
 
 func IsSensitiveOptionKey(key string) bool {
+	if isNotificationSensitiveOptionKey(key) {
+		return true
+	}
 	normalized := strings.ToLower(strings.TrimSpace(key))
 	if normalized == "" {
 		return false

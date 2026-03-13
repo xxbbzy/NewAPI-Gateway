@@ -16,19 +16,19 @@ The system SHALL persist provider operational health metadata independently from
 - **THEN** the system SHALL record provider health failure metadata without requiring the administrator-controlled status field to be rewritten
 
 ### Requirement: Provider SHALL Be Marked Unreachable After Classified Access Failure
-The system SHALL classify provider-level access failures and mark the provider unreachable when those failures indicate the upstream site cannot currently be used.
+The system SHALL treat provider site health as a sync-derived accessibility signal and SHALL mark the provider unreachable when the latest sync run encounters a classified transport or upstream access failure.
 
-#### Scenario: Sync chain marks provider unreachable on access failure
+#### Scenario: Sync run marks provider unreachable on classified access failure
 - **WHEN** provider sync encounters a classified transport or upstream access failure
 - **THEN** the system SHALL record the provider as unreachable with failure context and timestamp
 
-#### Scenario: Checkin chain marks provider unreachable on access failure
-- **WHEN** provider checkin encounters a classified transport or upstream access failure
-- **THEN** the system SHALL record the provider as unreachable with failure context and timestamp
+#### Scenario: Later sync substep success does not override earlier classified failure in the same run
+- **WHEN** one sync substep records a classified reachability failure and a later sync substep succeeds in the same sync run
+- **THEN** the final persisted provider site health for that run SHALL remain unreachable
 
-#### Scenario: Relay chain marks provider unreachable on access failure
-- **WHEN** upstream relay attempts for a provider encounter a classified access failure
-- **THEN** the system SHALL record the provider as unreachable with failure context and timestamp
+#### Scenario: Checkin failure does not rewrite provider site health
+- **WHEN** provider checkin fails for reasons including disabled upstream checkin or human verification requirements
+- **THEN** the system SHALL record the checkin result without changing provider site health
 
 ### Requirement: Unreachable Providers SHALL Stop Participating In Automated Usage
 The system SHALL prevent unreachable providers from continuing to participate in automated provider usage flows until they recover or are explicitly cleared according to the configured recovery behavior.
@@ -42,23 +42,38 @@ The system SHALL prevent unreachable providers from continuing to participate in
 - **THEN** providers marked unreachable SHALL be skipped from those automated runs
 
 ### Requirement: Provider Health SHALL Recover On Successful Subsequent Access
-The system SHALL clear the unreachable state when a later provider access succeeds through a covered chain.
+The system SHALL clear the unreachable state only when a later provider sync run completes without a classified site-access failure.
 
 #### Scenario: Successful sync restores provider health
-- **WHEN** a provider previously marked unreachable completes a successful sync access
+- **WHEN** a provider previously marked unreachable completes a sync run without classified access failures
 - **THEN** the system SHALL mark that provider healthy again and record the successful access time
 
-#### Scenario: Successful relay restores provider health
-- **WHEN** a provider previously marked unreachable serves a successful upstream relay request
-- **THEN** the system SHALL mark that provider healthy again and clear the active unreachable marker
+#### Scenario: Successful checkin does not independently restore provider health
+- **WHEN** a provider previously marked unreachable completes a successful checkin before the next successful sync
+- **THEN** the system SHALL retain the existing provider site health until sync confirms recovery
 
 ### Requirement: Provider Management SHALL Show Current Health And Last Failure Context
-The system SHALL display provider health status and recent failure context in the management experience.
+The system SHALL display provider site health as the latest sync-derived accessibility result and SHALL keep checkin state visible as a separate operational signal in management views.
 
-#### Scenario: Provider list shows reachable vs unreachable state
+#### Scenario: Provider list shows sync-derived site health
 - **WHEN** an administrator views the provider list
-- **THEN** each provider row SHALL show whether the provider is currently healthy or unreachable
+- **THEN** each provider row SHALL show whether the latest sync result considers the site healthy or unreachable
 
-#### Scenario: Provider detail shows last failure reason
-- **WHEN** an administrator opens provider detail for a provider with recorded health failure metadata
-- **THEN** the UI SHALL show the latest failure reason and failure time
+#### Scenario: Provider detail separates site health and checkin state
+- **WHEN** an administrator opens provider detail for a provider with recorded health and checkin metadata
+- **THEN** the UI SHALL show sync-derived site health separately from checkin result fields and SHALL NOT infer site health from checkin outcome
+
+### Requirement: Provider Health Transitions SHALL Support Configurable Notifications
+The system SHALL emit notification-eligible provider health transition events when notification dispatch is enabled for provider health incidents.
+
+#### Scenario: Provider becomes unreachable
+- **WHEN** a provider health flow changes a provider into the unreachable state after a classified access failure
+- **THEN** the system SHALL emit one notification-eligible unreachable event containing the provider identity and recorded failure reason
+
+#### Scenario: Provider recovers after previous failure
+- **WHEN** a provider previously marked unreachable is later marked healthy by a successful covered access
+- **THEN** the system SHALL emit one notification-eligible recovery event for that provider
+
+#### Scenario: Repeated failure during same active incident
+- **WHEN** additional classified access failures occur while the provider is already in the same active unreachable incident state
+- **THEN** the system SHALL NOT emit duplicate unreachable notifications for that unchanged incident state

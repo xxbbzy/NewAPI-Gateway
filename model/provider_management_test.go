@@ -181,7 +181,7 @@ func TestGetCheckinEnabledProvidersExcludesUnreachableProvider(t *testing.T) {
 	}
 }
 
-func TestProviderCooldownExpiryAllowsAutomatedUseAgain(t *testing.T) {
+func TestProviderCooldownExpiryAllowsAutomatedUseAgainWithoutClearingResponseStatus(t *testing.T) {
 	originDB := DB
 	DB = prepareProviderManagementTestDB(t)
 	defer func() { DB = originDB }()
@@ -216,8 +216,8 @@ func TestProviderCooldownExpiryAllowsAutomatedUseAgain(t *testing.T) {
 	if reloaded.HealthBlocked {
 		t.Fatalf("expected provider not to be marked blocked after cooldown")
 	}
-	if reloaded.HealthStatus != ProviderHealthStatusUnknown {
-		t.Fatalf("expected response health status to fall back to unknown, got %s", reloaded.HealthStatus)
+	if reloaded.HealthStatus != ProviderHealthStatusUnreachable {
+		t.Fatalf("expected response health status to retain unreachable after cooldown, got %s", reloaded.HealthStatus)
 	}
 }
 

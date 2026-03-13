@@ -944,7 +944,9 @@ func logUsage(aggToken *model.AggregatedToken, provider *model.Provider, token *
 	go func() {
 		if err := log.Insert(); err != nil {
 			common.SysLog(fmt.Sprintf("failed to insert usage log: %v", err))
+			return
 		}
+		EvaluateRequestFailureAlert(log)
 	}()
 }
 

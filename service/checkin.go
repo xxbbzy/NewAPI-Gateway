@@ -172,9 +172,6 @@ func checkinProviderWithResult(provider *model.Provider) (*model.CheckinRunItem,
 	client, clientErr := NewUpstreamClientForProvider(provider)
 	if clientErr != nil {
 		item.Message = strings.TrimSpace(sanitizeProviderErrorMessage(provider, clientErr.Error()))
-		if reason, ok := classifyProviderReachabilityError(clientErr); ok {
-			markProviderHealthFailure(provider, reason)
-		}
 		return item, clientErr
 	}
 	result, err := client.Checkin()
@@ -190,14 +187,10 @@ func checkinProviderWithResult(provider *model.Provider) (*model.CheckinRunItem,
 			}
 			return item, err
 		}
-		if reason, ok := classifyProviderReachabilityError(err); ok {
-			markProviderHealthFailure(provider, reason)
-		}
 		return item, err
 	}
 
 	provider.UpdateCheckinTime()
-	markProviderHealthSuccess(provider)
 	item.Status = "success"
 	item.Message = strings.TrimSpace(result.Message)
 	if item.Message == "" {
@@ -216,6 +209,18 @@ func getUncheckinCount(now time.Time, timezone string) int {
 		return 0
 	}
 	return len(providers)
+}
+
+func emitCheckinItemNotifications(run *model.CheckinRun, items []*model.CheckinRunItem) {
+	for _, item := range items {
+		if item == nil || strings.EqualFold(strings.TrimSpace(item.Status), "success") {
+			continue
+		}
+		NotifyAsync(buildCheckinFailureNotificationEvent(run, item))
+		if item.AutoDisabled {
+			NotifyAsync(buildProviderAutoDisableNotificationEvent(run, item))
+		}
+	}
 }
 
 func executeCheckinRun(
@@ -282,6 +287,8 @@ func executeCheckinRun(
 	if err := run.Update(); err != nil {
 		common.SysLog("update checkin run summary failed: " + err.Error())
 	}
+	NotifyAsync(buildCheckinSummaryNotificationEvent(run))
+	emitCheckinItemNotifications(run, items)
 	return run, nil
 }
 
@@ -409,6 +416,12 @@ func RunProviderCheckin(provider *model.Provider) (*model.CheckinRun, *model.Che
 	run.EndedAt = time.Now().Unix()
 	if updateErr := run.Update(); updateErr != nil {
 		common.SysLog("update provider checkin run failed: " + updateErr.Error())
+	}
+	if err != nil {
+		NotifyAsync(buildCheckinFailureNotificationEvent(run, item))
+		if item.AutoDisabled {
+			NotifyAsync(buildProviderAutoDisableNotificationEvent(run, item))
+		}
 	}
 
 	if err != nil {

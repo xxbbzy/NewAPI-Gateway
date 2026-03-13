@@ -9,9 +9,15 @@ import (
 	"time"
 )
 
+var newUpstreamClientForProvider = NewUpstreamClientForProvider
+var syncPricingStep = syncPricing
+var syncTokensStep = syncTokens
+var syncBalanceStep = syncBalance
+var rebuildProviderRoutesForProvider = RebuildProviderRoutes
+
 // SyncProvider synchronizes pricing, tokens, and balance from an upstream provider
 func SyncProvider(provider *model.Provider) error {
-	client, err := NewUpstreamClientForProvider(provider)
+	client, err := newUpstreamClientForProvider(provider)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("build upstream client failed for provider %s: %v", provider.Name, err))
 		if reason, ok := classifyProviderReachabilityError(err); ok {
@@ -20,38 +26,58 @@ func SyncProvider(provider *model.Provider) error {
 		return err
 	}
 
-	// 1. Sync pricing
-	if err := syncPricing(client, provider); err != nil {
-		common.SysLog(fmt.Sprintf("sync pricing failed for provider %s: %v", provider.Name, err))
-		if reason, ok := classifyProviderReachabilityError(err); ok {
-			markProviderHealthFailure(provider, reason)
+	var healthObservationRecorded bool
+	var healthReachable bool
+	var healthFailureReason string
+	recordReachabilityFailure := func(err error) {
+		reason, ok := classifyProviderReachabilityError(err)
+		if !ok {
+			return
 		}
+		healthObservationRecorded = true
+		healthReachable = false
+		healthFailureReason = reason
+	}
+	recordReachabilitySuccess := func() {
+		healthObservationRecorded = true
+		healthReachable = true
+		healthFailureReason = ""
+	}
+
+	// 1. Sync pricing
+	if err := syncPricingStep(client, provider); err != nil {
+		common.SysLog(fmt.Sprintf("sync pricing failed for provider %s: %v", provider.Name, err))
+		recordReachabilityFailure(err)
 	} else {
-		markProviderHealthSuccess(provider)
+		recordReachabilitySuccess()
 	}
 
 	// 2. Sync tokens
-	if err := syncTokens(client, provider); err != nil {
+	if err := syncTokensStep(client, provider); err != nil {
 		common.SysLog(fmt.Sprintf("sync tokens failed for provider %s: %v", provider.Name, err))
-		if reason, ok := classifyProviderReachabilityError(err); ok {
-			markProviderHealthFailure(provider, reason)
-		}
+		recordReachabilityFailure(err)
 	} else {
-		markProviderHealthSuccess(provider)
+		recordReachabilitySuccess()
 	}
 
 	// 3. Sync balance
-	if err := syncBalance(client, provider); err != nil {
+	if err := syncBalanceStep(client, provider); err != nil {
 		common.SysLog(fmt.Sprintf("sync balance failed for provider %s: %v", provider.Name, err))
-		if reason, ok := classifyProviderReachabilityError(err); ok {
-			markProviderHealthFailure(provider, reason)
-		}
+		recordReachabilityFailure(err)
 	} else {
-		markProviderHealthSuccess(provider)
+		recordReachabilitySuccess()
+	}
+
+	if healthObservationRecorded {
+		if healthReachable {
+			markProviderHealthSuccess(provider)
+		} else {
+			markProviderHealthFailure(provider, healthFailureReason)
+		}
 	}
 
 	// 4. Rebuild routes for this provider
-	if err := RebuildProviderRoutes(provider.Id); err != nil {
+	if err := rebuildProviderRoutesForProvider(provider.Id); err != nil {
 		common.SysLog(fmt.Sprintf("rebuild routes failed for provider %s: %v", provider.Name, err))
 	}
 

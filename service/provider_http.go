@@ -138,9 +138,15 @@ func markProviderHealthFailure(provider *model.Provider, reason string) {
 	if provider == nil {
 		return
 	}
+	wasUnreachable := strings.EqualFold(strings.TrimSpace(provider.HealthStatus), model.ProviderHealthStatusUnreachable)
 	sanitized := sanitizeProviderErrorMessage(provider, reason)
 	if err := provider.MarkHealthFailure(sanitized); err != nil {
 		common.SysLog("mark provider health failure failed: " + err.Error())
+		return
+	}
+	if !wasUnreachable {
+		markProviderHealthAlertOpen(provider, sanitized)
+		NotifyAsync(buildProviderUnreachableNotificationEvent(provider, sanitized))
 	}
 }
 
@@ -148,8 +154,15 @@ func markProviderHealthSuccess(provider *model.Provider) {
 	if provider == nil {
 		return
 	}
+	wasUnreachable := strings.EqualFold(strings.TrimSpace(provider.HealthStatus), model.ProviderHealthStatusUnreachable)
+	previousReason := strings.TrimSpace(provider.HealthFailureReason)
 	if err := provider.MarkHealthSuccess(); err != nil {
 		common.SysLog("mark provider health success failed: " + err.Error())
+		return
+	}
+	if wasUnreachable {
+		markProviderHealthAlertClosed(provider, previousReason)
+		NotifyAsync(buildProviderRecoveryNotificationEvent(provider, previousReason))
 	}
 }
 

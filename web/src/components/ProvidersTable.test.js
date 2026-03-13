@@ -148,6 +148,57 @@ describe('ProvidersTable', () => {
     expect(container.textContent).toContain('$12.50');
   });
 
+  it('renders site health independently from checkin enabled state in provider rows', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.startsWith('/api/provider/?p=')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [
+                {
+                  id: 1,
+                  name: 'Provider-A',
+                  base_url: 'https://a.example.com',
+                  created_at: 1730000000,
+                  status: 1,
+                  checkin_enabled: true,
+                  weight: 10,
+                  priority: 0,
+                  health_status: 'unreachable',
+                  health_blocked: true,
+                },
+              ],
+              p: 0,
+              page_size: 10,
+              total: 1,
+              total_pages: 1,
+              has_more: false,
+            },
+          },
+        });
+      }
+      if (url === '/api/provider/summary') {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      if (url === '/api/provider/checkin/summary?limit=1' || url === '/api/provider/checkin/messages?limit=20' || url === '/api/provider/checkin/uncheckin') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      return Promise.resolve({ data: { success: true, data: [] } });
+    });
+
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(container.textContent).toContain('Provider-A');
+    expect(container.textContent).toContain('不可用');
+    expect(container.textContent).toContain('已启用');
+  });
+
   it('triggers unchecked-only checkin run from overview action', async () => {
     API.post.mockResolvedValue({
       data: { success: true, message: '' },

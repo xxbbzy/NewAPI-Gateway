@@ -262,9 +262,6 @@ func (p *Provider) CleanForResponse() {
 	p.ProxyURL = ""
 	p.HealthStatus = normalizeProviderHealthStatus(p.HealthStatus)
 	p.HealthBlocked = p.IsHealthBlockedAt(now)
-	if p.HealthStatus == ProviderHealthStatusUnreachable && !p.HealthBlocked {
-		p.HealthStatus = ProviderHealthStatusUnknown
-	}
 	p.BalanceFreshness = p.BalanceFreshnessAt(now)
 }
 
