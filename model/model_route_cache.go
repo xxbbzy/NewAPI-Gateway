@@ -166,7 +166,7 @@ func buildRoutingStaticSnapshot() (*routingStaticSnapshot, error) {
 
 	if len(providerIds) > 0 {
 		var providers []Provider
-		if err := DB.Where("id IN ?", providerIds).Find(&providers).Error; err != nil {
+		if err := applyProviderReadProjection(DB).Where("id IN ?", providerIds).Find(&providers).Error; err != nil {
 			return nil, err
 		}
 		for i := range providers {

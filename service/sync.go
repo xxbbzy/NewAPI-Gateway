@@ -11,21 +11,43 @@ import (
 
 // SyncProvider synchronizes pricing, tokens, and balance from an upstream provider
 func SyncProvider(provider *model.Provider) error {
-	client := NewUpstreamClient(provider.BaseURL, provider.AccessToken, provider.UserID)
+	client, err := NewUpstreamClientForProvider(provider)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("build upstream client failed for provider %s: %v", provider.Name, err))
+		if reason, ok := classifyProviderReachabilityError(err); ok {
+			markProviderHealthFailure(provider, reason)
+		}
+		return err
+	}
 
 	// 1. Sync pricing
 	if err := syncPricing(client, provider); err != nil {
 		common.SysLog(fmt.Sprintf("sync pricing failed for provider %s: %v", provider.Name, err))
+		if reason, ok := classifyProviderReachabilityError(err); ok {
+			markProviderHealthFailure(provider, reason)
+		}
+	} else {
+		markProviderHealthSuccess(provider)
 	}
 
 	// 2. Sync tokens
 	if err := syncTokens(client, provider); err != nil {
 		common.SysLog(fmt.Sprintf("sync tokens failed for provider %s: %v", provider.Name, err))
+		if reason, ok := classifyProviderReachabilityError(err); ok {
+			markProviderHealthFailure(provider, reason)
+		}
+	} else {
+		markProviderHealthSuccess(provider)
 	}
 
 	// 3. Sync balance
 	if err := syncBalance(client, provider); err != nil {
 		common.SysLog(fmt.Sprintf("sync balance failed for provider %s: %v", provider.Name, err))
+		if reason, ok := classifyProviderReachabilityError(err); ok {
+			markProviderHealthFailure(provider, reason)
+		}
+	} else {
+		markProviderHealthSuccess(provider)
 	}
 
 	// 4. Rebuild routes for this provider

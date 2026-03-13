@@ -73,6 +73,7 @@ func SetApiRouter(router *gin.Engine) {
 		providerRoute.Use(middleware.AdminAuth(), middleware.NoTokenAuth())
 		{
 			providerRoute.GET("/", controller.GetProviders)
+			providerRoute.GET("/summary", controller.GetProviderSummary)
 			providerRoute.GET("/export", controller.ExportProviders)
 			providerRoute.POST("/import", controller.ImportProviders)
 			providerRoute.GET("/checkin/summary", controller.GetCheckinRunSummaries)

@@ -169,10 +169,17 @@ func checkinProviderWithResult(provider *model.Provider) (*model.CheckinRunItem,
 		CheckedAt:    checkedAt,
 	}
 
-	client := NewUpstreamClient(provider.BaseURL, provider.AccessToken, provider.UserID)
+	client, clientErr := NewUpstreamClientForProvider(provider)
+	if clientErr != nil {
+		item.Message = strings.TrimSpace(sanitizeProviderErrorMessage(provider, clientErr.Error()))
+		if reason, ok := classifyProviderReachabilityError(clientErr); ok {
+			markProviderHealthFailure(provider, reason)
+		}
+		return item, clientErr
+	}
 	result, err := client.Checkin()
 	if err != nil {
-		item.Message = strings.TrimSpace(err.Error())
+		item.Message = strings.TrimSpace(sanitizeProviderErrorMessage(provider, err.Error()))
 		if isUpstreamCheckinDisabledFailure(item.Message) {
 			if disableErr := provider.UpdateCheckinEnabled(false); disableErr != nil {
 				common.SysLog(fmt.Sprintf("failed to auto-disable checkin for provider %s: %v", provider.Name, disableErr))
@@ -181,11 +188,16 @@ func checkinProviderWithResult(provider *model.Provider) (*model.CheckinRunItem,
 				item.Message = appendUpstreamCheckinAutoDisableHint(item.Message)
 				common.SysLog(fmt.Sprintf("provider %s checkin auto-disabled due to upstream unavailable", provider.Name))
 			}
+			return item, err
+		}
+		if reason, ok := classifyProviderReachabilityError(err); ok {
+			markProviderHealthFailure(provider, reason)
 		}
 		return item, err
 	}
 
 	provider.UpdateCheckinTime()
+	markProviderHealthSuccess(provider)
 	item.Status = "success"
 	item.Message = strings.TrimSpace(result.Message)
 	if item.Message == "" {

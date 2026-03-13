@@ -9,6 +9,7 @@ import (
 var syncTicker *time.Ticker
 var checkinSchedulerTicker *time.Ticker
 var stopCron chan bool
+var syncProviderRunner = SyncProvider
 
 // StartCronJobs starts background sync and checkin tasks
 func StartCronJobs() {
@@ -48,13 +49,13 @@ func StopCronJobs() {
 }
 
 func syncAllProviders() {
-	providers, err := model.GetEnabledProviders()
+	providers, err := model.GetAutomatedSyncProviders()
 	if err != nil {
-		common.SysLog("failed to get enabled providers for sync: " + err.Error())
+		common.SysLog("failed to get automated-sync providers: " + err.Error())
 		return
 	}
 	for _, p := range providers {
-		if err := SyncProvider(p); err != nil {
+		if err := syncProviderRunner(p); err != nil {
 			common.SysLog("sync failed for provider " + p.Name + ": " + err.Error())
 		}
 	}

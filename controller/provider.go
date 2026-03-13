@@ -27,7 +27,8 @@ var syncProviderAfterTokenCreate = func(provider *model.Provider) {
 
 func GetProviders(c *gin.Context) {
 	pagination := parsePaginationParams(c)
-	providers, total, err := model.QueryProviders(pagination.Offset, pagination.PageSize)
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	providers, total, err := model.QueryProviders(keyword, pagination.Offset, pagination.PageSize)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
@@ -37,6 +38,15 @@ func GetProviders(c *gin.Context) {
 		provider.CleanForResponse()
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": buildPaginatedData(providers, pagination, total)})
+}
+
+func GetProviderSummary(c *gin.Context) {
+	summary, err := model.GetProviderSummary()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": summary})
 }
 
 func GetProviderDetail(c *gin.Context) {
@@ -190,6 +200,9 @@ func ExportProviders(c *gin.Context) {
 		Priority          int    `json:"priority,omitempty"`
 		Weight            int    `json:"weight,omitempty"`
 		CheckinEnabled    bool   `json:"checkin_enabled,omitempty"`
+		ProxyEnabled      bool   `json:"proxy_enabled,omitempty"`
+		ProxyURL          string `json:"proxy_url,omitempty"`
+		ProxyURLRedacted  string `json:"proxy_url_redacted,omitempty"`
 		ModelAliasMapping string `json:"model_alias_mapping,omitempty"`
 		Remark            string `json:"remark,omitempty"`
 	}
@@ -204,6 +217,9 @@ func ExportProviders(c *gin.Context) {
 			Priority:          p.Priority,
 			Weight:            p.Weight,
 			CheckinEnabled:    p.CheckinEnabled,
+			ProxyEnabled:      p.ProxyEnabled,
+			ProxyURL:          p.ProxyURL,
+			ProxyURLRedacted:  model.RedactProxyURL(p.ProxyURL),
 			ModelAliasMapping: p.ModelAliasMapping,
 			Remark:            p.Remark,
 		})
@@ -222,6 +238,8 @@ func ImportProviders(c *gin.Context) {
 		Priority          int               `json:"priority"`
 		Weight            int               `json:"weight"`
 		CheckinEnabled    bool              `json:"checkin_enabled"`
+		ProxyEnabled      bool              `json:"proxy_enabled"`
+		ProxyURL          string            `json:"proxy_url"`
 		ModelAliasMapping map[string]string `json:"model_alias_mapping"`
 		Remark            string            `json:"remark"`
 	}
@@ -254,6 +272,10 @@ func ImportProviders(c *gin.Context) {
 		if weight == 0 {
 			weight = 10
 		}
+		if err := model.ValidateProviderProxyConfig(item.ProxyEnabled, item.ProxyURL); err != nil {
+			skipped++
+			continue
+		}
 
 		// Conflict detection: use (base_url, user_id) as logical unique key
 		// - Same base_url + same user_id → update existing record
@@ -273,6 +295,10 @@ func ImportProviders(c *gin.Context) {
 			existing.Priority = item.Priority
 			existing.Weight = weight
 			existing.CheckinEnabled = item.CheckinEnabled
+			existing.ProxyEnabled = item.ProxyEnabled
+			if strings.TrimSpace(item.ProxyURL) != "" {
+				existing.ProxyURL = item.ProxyURL
+			}
 			existing.Remark = item.Remark
 			if aliasMapping != "" {
 				existing.ModelAliasMapping = aliasMapping
@@ -293,6 +319,8 @@ func ImportProviders(c *gin.Context) {
 				Priority:          item.Priority,
 				Weight:            weight,
 				CheckinEnabled:    item.CheckinEnabled,
+				ProxyEnabled:      item.ProxyEnabled,
+				ProxyURL:          item.ProxyURL,
 				ModelAliasMapping: aliasMapping,
 				Remark:            item.Remark,
 			}
@@ -320,6 +348,10 @@ func CreateProvider(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "名称、地址和 AccessToken 不能为空"})
 		return
 	}
+	if err := model.ValidateProviderProxyConfig(provider.ProxyEnabled, provider.ProxyURL); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		return
+	}
 	if err := provider.Insert(); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
@@ -340,12 +372,28 @@ func UpdateProvider(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的参数"})
 		return
 	}
+	existing, existingErr := model.GetProviderById(provider.Id)
+	if existingErr != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "供应商不存在"})
+		return
+	}
 
 	var checkinPayload struct {
 		CheckinEnabled *bool `json:"checkin_enabled"`
+		ProxyEnabled   *bool `json:"proxy_enabled"`
 	}
 	if err := json.Unmarshal(rawBody, &checkinPayload); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的参数"})
+		return
+	}
+	if strings.TrimSpace(provider.AccessToken) == "" {
+		provider.AccessToken = existing.AccessToken
+	}
+	if strings.TrimSpace(provider.ProxyURL) == "" {
+		provider.ProxyURL = existing.ProxyURL
+	}
+	if err := model.ValidateProviderProxyConfig(provider.ProxyEnabled, provider.ProxyURL); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 
@@ -356,6 +404,12 @@ func UpdateProvider(c *gin.Context) {
 
 	if checkinPayload.CheckinEnabled != nil {
 		if err := (&model.Provider{Id: provider.Id}).UpdateCheckinEnabled(*checkinPayload.CheckinEnabled); err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+			return
+		}
+	}
+	if checkinPayload.ProxyEnabled != nil {
+		if err := model.DB.Model(&model.Provider{}).Where("id = ?", provider.Id).Update("proxy_enabled", *checkinPayload.ProxyEnabled).Error; err != nil {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 			return
 		}

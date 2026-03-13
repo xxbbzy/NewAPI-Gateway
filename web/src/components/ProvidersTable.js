@@ -9,7 +9,8 @@ import {
   X,
   Eye,
   Download,
-  Upload
+  Upload,
+  Search
 } from 'lucide-react';
 import { API, normalizePaginatedData, showError, showSuccess, timestamp2string } from '../helpers';
 import { ITEMS_PER_PAGE } from '../constants';
@@ -31,18 +32,27 @@ const ProvidersTable = () => {
   const [latestCheckinRun, setLatestCheckinRun] = useState(null);
   const [checkinMessages, setCheckinMessages] = useState([]);
   const [uncheckinProviders, setUncheckinProviders] = useState([]);
+  const [providerSummary, setProviderSummary] = useState(null);
   const [checkinOverviewLoading, setCheckinOverviewLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editProvider, setEditProvider] = useState(null);
   const [activePage, setActivePage] = useState(1);
+  const [searchKeyword, setSearchKeyword] = useState('');
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
 
   const loadProviders = useCallback(async (page = 0) => {
     setLoading(true);
     try {
-      const res = await API.get(`/api/provider/?p=${page}&page_size=${ITEMS_PER_PAGE}`);
+      const params = new URLSearchParams();
+      params.set('p', String(page));
+      params.set('page_size', String(ITEMS_PER_PAGE));
+      const keyword = searchKeyword.trim();
+      if (keyword) {
+        params.set('keyword', keyword);
+      }
+      const res = await API.get(`/api/provider/?${params.toString()}`);
       const { success, data, message } = res.data;
       if (success) {
         const normalized = normalizePaginatedData(data, { p: page, page_size: ITEMS_PER_PAGE });
@@ -58,6 +68,20 @@ const ProvidersTable = () => {
       showError('加载供应商失败');
     } finally {
       setLoading(false);
+    }
+  }, [searchKeyword]);
+
+  const loadProviderSummary = useCallback(async () => {
+    try {
+      const res = await API.get('/api/provider/summary');
+      const { success, data, message } = res.data;
+      if (success) {
+        setProviderSummary(data || null);
+      } else {
+        showError(message || '加载供应商汇总失败');
+      }
+    } catch (e) {
+      showError('加载供应商汇总失败');
     }
   }, []);
 
@@ -101,8 +125,9 @@ const ProvidersTable = () => {
     } else {
       await loadProviders(0);
     }
+    await loadProviderSummary();
     await loadCheckinOverview();
-  }, [activePage, loadCheckinOverview, loadProviders]);
+  }, [activePage, loadCheckinOverview, loadProviderSummary, loadProviders]);
 
   useEffect(() => {
     loadProviders(activePage - 1);
@@ -111,6 +136,10 @@ const ProvidersTable = () => {
   useEffect(() => {
     loadCheckinOverview();
   }, [loadCheckinOverview]);
+
+  useEffect(() => {
+    loadProviderSummary();
+  }, [loadProviderSummary]);
 
   const deleteProvider = async (id) => {
     if (!window.confirm('确定要删除此供应商吗？')) return;
@@ -182,6 +211,8 @@ const ProvidersTable = () => {
     setEditProvider({
       ...provider,
       user_id: provider?.user_id ? String(provider.user_id) : '',
+      access_token: '',
+      proxy_url: '',
     });
     setShowModal(true);
   };
@@ -195,6 +226,8 @@ const ProvidersTable = () => {
       priority: 0,
       weight: 10,
       checkin_enabled: false,
+      proxy_enabled: false,
+      proxy_url: '',
       remark: '',
     });
     setShowModal(true);
@@ -311,6 +344,25 @@ const ProvidersTable = () => {
     return `$${(quota / QUOTA_PER_USD).toFixed(2)}`;
   };
 
+  const formatBalanceValue = (value) => {
+    const amount = Number(value || 0);
+    if (!Number.isFinite(amount)) {
+      return '$0.00';
+    }
+    return `$${amount.toFixed(2)}`;
+  };
+
+  const renderProviderHealth = (provider) => {
+    const status = String(provider?.health_status || '').trim();
+    if (provider?.health_blocked || status === 'unreachable') {
+      return <Badge color="red">不可用</Badge>;
+    }
+    if (status === 'healthy') {
+      return <Badge color="green">可访问</Badge>;
+    }
+    return <Badge color="gray">未知</Badge>;
+  };
+
   const onPaginationChange = async (e, { activePage: nextActivePage }) => {
     if (nextActivePage < 1) return;
     const effectiveTotalPages = Math.max(totalPages, 1);
@@ -323,6 +375,40 @@ const ProvidersTable = () => {
 
   return (
     <>
+      <Card style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.35rem' }}>总账户数</div>
+            <div style={{ fontWeight: 600 }}>{Number(providerSummary?.total_providers || 0)}</div>
+          </div>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.35rem' }}>余额汇总</div>
+            <div style={{ fontWeight: 600 }}>{formatBalanceValue(providerSummary?.balance_total_usd || 0)}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
+              已统计 {Number(providerSummary?.balance_account_count || 0)} 个账户
+            </div>
+          </div>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.35rem' }}>余额新鲜度</div>
+            <div style={{ fontWeight: 600 }}>
+              新鲜 {Number(providerSummary?.balance_fresh_count || 0)} / 过期 {Number(providerSummary?.balance_stale_count || 0)}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
+              未更新 {Number(providerSummary?.balance_never_updated_count || 0)}
+            </div>
+          </div>
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '0.75rem' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.35rem' }}>站点异常 / 代理</div>
+            <div style={{ fontWeight: 600 }}>
+              {Number(providerSummary?.unreachable_providers || 0)} / {Number(providerSummary?.proxy_enabled_providers || 0)}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', marginTop: '0.25rem' }}>
+              不可用 / 已启用代理
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <Card style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
           <div>
@@ -420,7 +506,21 @@ const ProvidersTable = () => {
 
       <Card padding="0">
         <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ fontWeight: '600' }}>供应商列表</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: '600', whiteSpace: 'nowrap' }}>供应商列表</div>
+            <div style={{ maxWidth: '360px', width: '100%' }}>
+              <Input
+                placeholder='搜索名称、地址、备注、用户 ID'
+                value={searchKeyword}
+                onChange={(e) => {
+                  setSearchKeyword(e.target.value);
+                  setActivePage(1);
+                }}
+                icon={Search}
+                style={{ marginBottom: 0 }}
+              />
+            </div>
+          </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <Button variant="outline" onClick={exportProviders} icon={Download}>导出</Button>
             <Button variant="outline" onClick={importProviders} icon={Upload}>导入</Button>
@@ -438,6 +538,7 @@ const ProvidersTable = () => {
                 <Th>名称</Th>
                 <Th>地址</Th>
                 <Th>加入时间</Th>
+                <Th>站点</Th>
                 <Th>状态</Th>
                 <Th>余额</Th>
                 <Th>权重</Th>
@@ -453,8 +554,26 @@ const ProvidersTable = () => {
                   <Td>{p.name}</Td>
                   <Td><div style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.base_url}>{p.base_url}</div></Td>
                   <Td>{formatTime(p.created_at)}</Td>
+                  <Td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      <div>{renderProviderHealth(p)}</div>
+                      {p.proxy_enabled && <Badge color="orange">代理</Badge>}
+                      {p.health_failure_reason && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', maxWidth: '180px' }} title={p.health_failure_reason}>
+                          {p.health_failure_reason}
+                        </div>
+                      )}
+                    </div>
+                  </Td>
                   <Td>{renderStatus(p.status)}</Td>
-                  <Td>{p.balance ? p.balance : '无'}</Td>
+                  <Td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      <div>{p.balance ? p.balance : '无'}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        更新：{formatTime(p.balance_updated)}
+                      </div>
+                    </div>
+                  </Td>
                   <Td>{p.weight}</Td>
                   <Td>{p.priority}</Td>
                   <Td>
@@ -482,7 +601,7 @@ const ProvidersTable = () => {
               ))}
               {displayedProviders.length === 0 && (
                 <Tr>
-                  <Td colSpan={10} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                  <Td colSpan={11} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
                     暂无供应商数据
                   </Td>
                 </Tr>
@@ -532,6 +651,11 @@ const ProvidersTable = () => {
             value={editProvider?.access_token || ''}
             onChange={(e) => setEditProvider({ ...editProvider, access_token: e.target.value })}
           />
+          {editProvider?.id && (
+            <div style={{ marginTop: '-0.5rem', marginBottom: '0.5rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+              留空将保持当前访问令牌不变
+            </div>
+          )}
           <div style={{ marginTop: '-0.5rem', marginBottom: '0.5rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
             <a href={ACCESS_TOKEN_GUIDE_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--primary-600)' }}>
               如何获取访问令牌
@@ -578,6 +702,30 @@ const ProvidersTable = () => {
             />
             <label htmlFor="checkin_enabled">启用签到</label>
           </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
+            <input
+              type="checkbox"
+              id="proxy_enabled"
+              checked={editProvider?.proxy_enabled || false}
+              onChange={(e) => setEditProvider({ ...editProvider, proxy_enabled: e.target.checked })}
+              style={{ marginRight: '0.5rem' }}
+            />
+            <label htmlFor="proxy_enabled">启用站点代理</label>
+          </div>
+
+          <Input
+            label="代理地址"
+            type="password"
+            placeholder="http://user:pass@proxy.example.com:7890"
+            value={editProvider?.proxy_url || ''}
+            onChange={(e) => setEditProvider({ ...editProvider, proxy_url: e.target.value })}
+          />
+          {editProvider?.proxy_url_redacted && !editProvider?.proxy_url && (
+            <div style={{ marginTop: '-0.5rem', marginBottom: '0.5rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+              当前代理：{editProvider.proxy_url_redacted}，留空将保持现有代理地址
+            </div>
+          )}
 
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <label style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>备注</label>
