@@ -92,7 +92,7 @@ func GetAggTokenByKey(key string) (*AggregatedToken, error) {
 		return nil, errors.New("key 为空")
 	}
 	var token AggregatedToken
-	err := DB.Where("`key` = ?", key).First(&token).Error
+	err := DB.Where(&AggregatedToken{Key: key}).First(&token).Error
 	return &token, err
 }
 
