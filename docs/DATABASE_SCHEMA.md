@@ -43,6 +43,7 @@
 ### provider_tokens
 
 - `sk_key`：上游真实鉴权 key（敏感字段）。
+- 管理接口返回时会对 `sk_key` 做脱敏显示；数据库中不应持久化带 `*` 的展示值。
 - `group_name`：用于匹配 `model_pricings.enable_groups`。
 - `model_limits`：可选模型限制（逗号分隔）。
 

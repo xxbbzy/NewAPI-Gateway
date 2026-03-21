@@ -75,6 +75,15 @@ func makeProviderRequestContext(method string, path string, body []byte, provide
 	return ctx, recorder
 }
 
+func makeProviderTokenRequestContext(method string, path string, body []byte, tokenID int) (*gin.Context, *httptest.ResponseRecorder) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "token_id", Value: strconv.Itoa(tokenID)}}
+	ctx.Request = httptest.NewRequest(method, path, bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	return ctx, recorder
+}
+
 func TestGetProviderPricingReturnsTokenGroupOptionsAndDefaultGroup(t *testing.T) {
 	originDB := model.DB
 	model.DB = prepareProviderTokenValidationTestDB(t)
@@ -235,5 +244,53 @@ func TestCreateProviderTokenAcceptsValidGroup(t *testing.T) {
 	}
 	if !validResp.Success {
 		t.Fatalf("expected valid group to pass, got message: %s", validResp.Message)
+	}
+}
+
+func TestUpdateProviderTokenDoesNotOverwriteStoredSkKey(t *testing.T) {
+	originDB := model.DB
+	model.DB = prepareProviderTokenValidationTestDB(t)
+	defer func() { model.DB = originDB }()
+
+	gin.SetMode(gin.TestMode)
+	provider := newProviderWithPricing(t, "https://example.invalid")
+	token := &model.ProviderToken{
+		ProviderId:      provider.Id,
+		UpstreamTokenId: 123,
+		SkKey:           "sk-real-secret",
+		Name:            "original",
+		GroupName:       "default",
+		Status:          1,
+		Priority:        0,
+		Weight:          10,
+	}
+	if err := token.Insert(); err != nil {
+		t.Fatalf("insert token failed: %v", err)
+	}
+
+	body := []byte(`{"provider_id":1,"sk_key":"sk-abcd**********wxyz","name":"updated","group_name":"vip","status":0,"priority":7,"weight":15}`)
+	ctx, recorder := makeProviderTokenRequestContext(http.MethodPut, "/api/provider/token/"+strconv.Itoa(token.Id), body, token.Id)
+	UpdateProviderToken(ctx)
+
+	var resp struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected update success, got message=%s", resp.Message)
+	}
+
+	reloaded, err := model.GetProviderTokenById(token.Id)
+	if err != nil {
+		t.Fatalf("reload token failed: %v", err)
+	}
+	if reloaded.SkKey != "sk-real-secret" {
+		t.Fatalf("expected stored sk_key to remain unchanged, got %q", reloaded.SkKey)
+	}
+	if reloaded.Name != "updated" || reloaded.GroupName != "vip" || reloaded.Status != 0 || reloaded.Priority != 7 || reloaded.Weight != 15 {
+		t.Fatalf("expected editable fields to be updated, got %+v", reloaded)
 	}
 }

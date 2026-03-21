@@ -103,3 +103,70 @@ func TestSyncTokensIncludesFirstPageAndDeduplicates(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncTokensDoesNotPersistMaskedUpstreamKey(t *testing.T) {
+	originDB := model.DB
+	model.DB = prepareSyncTokenPaginationTestDB(t)
+	defer func() { model.DB = originDB }()
+
+	if err := model.DB.Create(&model.ProviderToken{
+		ProviderId:      1,
+		UpstreamTokenId: 10,
+		SkKey:           "sk-abcd**********wxyz",
+		Name:            "existing",
+		GroupName:       "default",
+		Status:          1,
+	}).Error; err != nil {
+		t.Fatalf("seed existing token failed: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/token/":
+			payload := map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"page":      0,
+					"page_size": 100,
+					"total":     2,
+					"items": []map[string]interface{}{
+						{"id": 10, "key": "abcd**********wxyz", "name": "existing", "status": 1, "group": "default"},
+						{"id": 11, "key": "lmno**********pqrs", "name": "new", "status": 1, "group": "default"},
+					},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(payload)
+		case "/api/token/10/key":
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"key":"real-existing-key"}}`))
+		case "/api/token/11/key":
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"key":"real-new-key"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewUpstreamClient(server.URL, "token", 1)
+	provider := &model.Provider{Id: 1, Name: "p1", Priority: 0, Weight: 10}
+	if err := syncTokens(client, provider); err != nil {
+		t.Fatalf("syncTokens failed: %v", err)
+	}
+
+	var existing model.ProviderToken
+	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", 1, 10).First(&existing).Error; err != nil {
+		t.Fatalf("query existing token failed: %v", err)
+	}
+	if existing.SkKey != "sk-real-existing-key" {
+		t.Fatalf("expected existing masked key to be healed, got %q", existing.SkKey)
+	}
+
+	var created model.ProviderToken
+	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", 1, 11).First(&created).Error; err != nil {
+		t.Fatalf("query created token failed: %v", err)
+	}
+	if created.SkKey != "sk-real-new-key" {
+		t.Fatalf("expected new token key to be fetched from key endpoint, got %q", created.SkKey)
+	}
+}

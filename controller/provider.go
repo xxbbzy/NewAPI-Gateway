@@ -734,17 +734,38 @@ func UpdateProviderToken(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的 Token ID"})
 		return
 	}
-	var token model.ProviderToken
-	if err := json.NewDecoder(c.Request.Body).Decode(&token); err != nil {
+	existing, err := model.GetProviderTokenById(tokenId)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Token 不存在"})
+		return
+	}
+	var req struct {
+		Name           string `json:"name"`
+		GroupName      string `json:"group_name"`
+		Status         int    `json:"status"`
+		Priority       int    `json:"priority"`
+		Weight         int    `json:"weight"`
+		UnlimitedQuota bool   `json:"unlimited_quota"`
+		RemainQuota    int64  `json:"remain_quota"`
+		ModelLimits    string `json:"model_limits"`
+	}
+	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "无效的参数"})
 		return
 	}
-	token.Id = tokenId
-	if err := token.Update(); err != nil {
+	existing.Name = req.Name
+	existing.GroupName = strings.TrimSpace(req.GroupName)
+	existing.Status = req.Status
+	existing.Priority = req.Priority
+	existing.Weight = req.Weight
+	existing.UnlimitedQuota = req.UnlimitedQuota
+	existing.RemainQuota = req.RemainQuota
+	existing.ModelLimits = req.ModelLimits
+	if err := existing.UpdateEditableFields(); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	service.MarkBackupDirty(fmt.Sprintf("provider_token_update:%d", token.Id))
+	service.MarkBackupDirty(fmt.Sprintf("provider_token_update:%d", existing.Id))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 

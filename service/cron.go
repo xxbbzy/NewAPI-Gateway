@@ -36,6 +36,7 @@ func StartCronJobs() {
 		}
 	}()
 
+	go syncAllProviders()
 	go RunScheduledCheckinIfNeeded(time.Now())
 	go EvaluateBackupScheduleIfNeeded(time.Now())
 	common.SysLog("cron jobs started: sync every 5m, scheduled checkin evaluated every 1m, backup scheduler evaluated every 1m")

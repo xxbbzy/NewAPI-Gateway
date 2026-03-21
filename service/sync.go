@@ -122,6 +122,15 @@ func syncPricing(client *UpstreamClient, provider *model.Provider) error {
 }
 
 func syncTokens(client *UpstreamClient, provider *model.Provider) error {
+	existingTokens, err := model.GetProviderTokensByProviderId(provider.Id)
+	if err != nil {
+		return err
+	}
+	existingByUpstreamID := make(map[int]*model.ProviderToken, len(existingTokens))
+	for _, token := range existingTokens {
+		existingByUpstreamID[token.UpstreamTokenId] = token
+	}
+
 	// Fetch all tokens (paginate)
 	var allTokens []UpstreamToken
 	seenTokenIDs := make(map[int]struct{})
@@ -157,10 +166,24 @@ func syncTokens(client *UpstreamClient, provider *model.Provider) error {
 	var upstreamIds []int
 	for _, t := range allTokens {
 		upstreamIds = append(upstreamIds, t.Id)
+		resolvedKey := model.NormalizeProviderTokenKey(t.Key)
+		if model.IsMaskedProviderTokenKey(resolvedKey) {
+			if existing := existingByUpstreamID[t.Id]; existing != nil && model.HasUsableProviderTokenKey(existing.SkKey) {
+				resolvedKey = existing.SkKey
+			} else {
+				fullKey, err := client.GetTokenKey(t.Id)
+				if err != nil {
+					common.SysLog(fmt.Sprintf("fetch full token key failed for upstream token %d: %v", t.Id, err))
+					resolvedKey = ""
+				} else {
+					resolvedKey = model.NormalizeProviderTokenKey(fullKey)
+				}
+			}
+		}
 		pt := &model.ProviderToken{
 			ProviderId:      provider.Id,
 			UpstreamTokenId: t.Id,
-			SkKey:           "sk-" + t.Key,
+			SkKey:           resolvedKey,
 			Name:            t.Name,
 			GroupName:       t.Group,
 			Status:          t.Status,

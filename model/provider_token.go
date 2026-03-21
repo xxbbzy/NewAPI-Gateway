@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -44,6 +45,26 @@ func GetProviderTokenById(id int) (*ProviderToken, error) {
 	return &token, err
 }
 
+func NormalizeProviderTokenKey(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "sk-") {
+		return trimmed
+	}
+	return "sk-" + trimmed
+}
+
+func IsMaskedProviderTokenKey(skKey string) bool {
+	return strings.Contains(strings.TrimSpace(skKey), "*")
+}
+
+func HasUsableProviderTokenKey(skKey string) bool {
+	normalized := NormalizeProviderTokenKey(skKey)
+	return normalized != "" && !IsMaskedProviderTokenKey(normalized)
+}
+
 func (pt *ProviderToken) Insert() error {
 	pt.CreatedAt = time.Now().Unix()
 	if err := DB.Create(pt).Error; err != nil {
@@ -55,6 +76,24 @@ func (pt *ProviderToken) Insert() error {
 
 func (pt *ProviderToken) Update() error {
 	if err := DB.Model(pt).Updates(pt).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
+}
+
+func (pt *ProviderToken) UpdateEditableFields() error {
+	updates := map[string]interface{}{
+		"name":            pt.Name,
+		"group_name":      pt.GroupName,
+		"status":          pt.Status,
+		"priority":        pt.Priority,
+		"weight":          pt.Weight,
+		"unlimited_quota": pt.UnlimitedQuota,
+		"remain_quota":    pt.RemainQuota,
+		"model_limits":    pt.ModelLimits,
+	}
+	if err := DB.Model(&ProviderToken{}).Where("id = ?", pt.Id).Updates(updates).Error; err != nil {
 		return err
 	}
 	invalidateModelRouteCaches()
@@ -75,12 +114,19 @@ func (pt *ProviderToken) Delete() error {
 
 // UpsertByUpstreamId creates or updates a provider token based on upstream token id + provider id
 func UpsertProviderToken(pt *ProviderToken) error {
+	pt.SkKey = NormalizeProviderTokenKey(pt.SkKey)
+	if IsMaskedProviderTokenKey(pt.SkKey) {
+		pt.SkKey = ""
+	}
 	var existing ProviderToken
 	result := DB.Where("provider_id = ? AND upstream_token_id = ?", pt.ProviderId, pt.UpstreamTokenId).First(&existing)
 	if result.RowsAffected > 0 {
 		// Update existing
 		pt.Id = existing.Id
 		pt.CreatedAt = existing.CreatedAt
+		if pt.SkKey == "" {
+			pt.SkKey = existing.SkKey
+		}
 		if err := DB.Model(&existing).Updates(pt).Error; err != nil {
 			return err
 		}
