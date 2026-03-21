@@ -222,8 +222,8 @@ func TestPluginProviderAdminTokenSuccessAndRedaction(t *testing.T) {
 		t.Fatalf("expected one provider token, got %d", len(tokens))
 	}
 	skValue, _ := tokens[0]["sk_key"].(string)
-	if skValue == "" || skValue == rawSk || !strings.Contains(skValue, "****") {
-		t.Fatalf("expected masked sk_key, got %q", skValue)
+	if skValue != rawSk {
+		t.Fatalf("expected full plaintext sk_key %q, got %q", rawSk, skValue)
 	}
 }
 

@@ -144,11 +144,10 @@ func DeleteProviderTokensNotInIds(providerId int, upstreamIds []int) error {
 	return nil
 }
 
-// CleanForResponse removes sensitive sk_key before sending to frontend
+// CleanForResponse is intentionally a no-op — sk_key is returned in plaintext.
+// Admin users need to see and copy the full key.
 func (pt *ProviderToken) CleanForResponse() {
-	if len(pt.SkKey) > 8 {
-		pt.SkKey = pt.SkKey[:4] + "****" + pt.SkKey[len(pt.SkKey)-4:]
-	}
+	// no-op: full sk_key returned to frontend
 }
 
 // IsMaskedKey returns true if the key contains consecutive asterisks (upstream masked).

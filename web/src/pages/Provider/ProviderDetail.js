@@ -514,7 +514,16 @@ const ProviderDetail = () => {
                                 <Tr key={t.id}>
                                     <Td>{t.id}</Td>
                                     <Td>{t.name || '-'}</Td>
-                                    <Td><code style={{ fontSize: '0.8rem', backgroundColor: 'var(--gray-100)', padding: '0.15rem 0.4rem', borderRadius: '0.25rem' }}>{t.sk_key}</code></Td>
+                                    <Td>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                            <code style={{ fontSize: '0.8rem', backgroundColor: 'var(--gray-100)', padding: '0.15rem 0.4rem', borderRadius: '0.25rem', wordBreak: 'break-all', userSelect: 'all' }}>{t.sk_key}</code>
+                                            <button
+                                                onClick={() => { navigator.clipboard.writeText(t.sk_key); const btn = document.getElementById(`copy-btn-${t.id}`); if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '复制'; }, 1500); } }}
+                                                id={`copy-btn-${t.id}`}
+                                                style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', borderRadius: '0.2rem', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', cursor: 'pointer', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}
+                                            >复制</button>
+                                        </div>
+                                    </Td>
                                     <Td>{t.group_name ? <Badge color="blue">{t.group_name}</Badge> : '-'}</Td>
                                     <Td>{renderStatus(t.status)}</Td>
                                     <Td>{t.unlimited_quota ? <Badge color="green">无限</Badge> : <span>{t.remain_quota}</span>}</Td>
