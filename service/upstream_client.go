@@ -284,6 +284,27 @@ func (c *UpstreamClient) GetTokenKey(tokenId int) (string, error) {
 	return resp.Data, nil
 }
 
+// GetTokenDetail fetches a single token via GET /api/token/:id.
+// Many New API forks return the full key in the detail response (no Clean/mask).
+func (c *UpstreamClient) GetTokenDetail(tokenId int) (string, error) {
+	path := fmt.Sprintf("/api/token/%d", tokenId)
+	body, err := c.doRequest("GET", path)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		Success bool          `json:"success"`
+		Data    UpstreamToken `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", err
+	}
+	if !resp.Success || resp.Data.Key == "" {
+		return "", fmt.Errorf("upstream get token detail failed or key empty")
+	}
+	return resp.Data.Key, nil
+}
+
 // CreateUpstreamToken calls upstream POST /api/token/ to create a new token.
 // Returns the created token (including full unmasked key) from the response.
 func (c *UpstreamClient) CreateUpstreamToken(name string, group string, unlimitedQuota bool, remainQuota int64, modelLimits string) (*UpstreamToken, error) {

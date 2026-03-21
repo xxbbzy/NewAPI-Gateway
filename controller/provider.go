@@ -723,12 +723,17 @@ func CreateProviderToken(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "上游创建 Token 失败: " + err.Error()})
 		return
 	}
-	// Immediately store the token with the full key from the create response
+	// Try to store the token with the full key from the create response.
+	// Some upstream forks include the key in the response data, some don't.
+	createdKey := ""
 	if created != nil && created.Key != "" && !model.IsMaskedKey(created.Key) {
+		createdKey = strings.TrimPrefix(created.Key, "sk-")
+	}
+	if createdKey != "" && created.Id > 0 {
 		pt := &model.ProviderToken{
 			ProviderId:      providerId,
 			UpstreamTokenId: created.Id,
-			SkKey:           "sk-" + created.Key,
+			SkKey:           "sk-" + createdKey,
 			Name:            created.Name,
 			GroupName:       created.Group,
 			Status:          created.Status,
@@ -743,10 +748,13 @@ func CreateProviderToken(c *gin.Context) {
 			common.SysLog("failed to store created token locally: " + insertErr.Error())
 		}
 	}
-	// Sync tokens back to update any other metadata
-	syncProviderAfterTokenCreate(provider)
+	// Run sync synchronously — this will pick up the newly created token
+	// and use GetTokenDetail to fetch the full key if not captured above.
+	if syncErr := service.SyncProvider(provider); syncErr != nil {
+		common.SysLog("sync after create token failed: " + syncErr.Error())
+	}
 	service.MarkBackupDirty(fmt.Sprintf("provider_token_create_upstream:%d", providerId))
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Token 已在上游创建，正在同步回本地"})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Token 已在上游创建并同步完成"})
 }
 
 func UpdateProviderToken(c *gin.Context) {

@@ -523,13 +523,11 @@ func TestPluginProviderTokenLifecycleCreateUpdateDelete(t *testing.T) {
 	if !createResp.Success {
 		t.Fatalf("expected plugin token create success, got message=%s", createResp.Message)
 	}
-	if createResp.Message != "Token 已在上游创建，正在同步回本地" {
+	if createResp.Message != "Token 已在上游创建并同步完成" {
 		t.Fatalf("unexpected create message: %s", createResp.Message)
 	}
 
-	// Wait for async sync to settle before checking/updating local token.
-	time.Sleep(250 * time.Millisecond)
-
+	// Sync is now synchronous in CreateProviderToken, no need to wait.
 	var existing model.ProviderToken
 	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", provider.Id, 100).First(&existing).Error; err != nil {
 		t.Fatalf("expected existing synced token for lifecycle update/delete, err=%v", err)

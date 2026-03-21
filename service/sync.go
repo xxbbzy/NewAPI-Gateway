@@ -158,28 +158,65 @@ func syncTokens(client *UpstreamClient, provider *model.Provider) error {
 	for _, t := range allTokens {
 		upstreamIds = append(upstreamIds, t.Id)
 
-		// Resolve the real sk_key
-		rawKey := t.Key
-		if model.IsMaskedKey(rawKey) {
-			// Upstream returned a masked key — try to fetch the full key
+		// Resolve the real sk_key.
+		// Upstream variants:
+		//   a) Full key returned (ideal)
+		//   b) Key masked with ** (some forks)
+		//   c) Key emptied by Clean() (some forks set key="")
+		//   d) Key already prefixed with sk- (some forks)
+		rawKey := strings.TrimPrefix(t.Key, "sk-") // strip if upstream includes prefix
+		needsFetch := rawKey == "" || model.IsMaskedKey(rawKey)
+
+		if needsFetch {
+			resolved := false
+			// Try GET /api/token/:id/key
 			fullKey, err := client.GetTokenKey(t.Id)
 			if err == nil && fullKey != "" && !model.IsMaskedKey(fullKey) {
-				rawKey = fullKey
-			} else {
-				// Fallback: preserve the existing local key if available
-				existing, _ := model.GetProviderTokenByUpstream(provider.Id, t.Id)
-				if existing != nil && existing.SkKey != "" && !model.IsMaskedKey(existing.SkKey) {
-					rawKey = existing.SkKey[len("sk-"):] // strip prefix for re-assembly
-				} else {
-					common.SysLog(fmt.Sprintf("warning: unable to resolve full key for upstream token %d of provider %s, storing masked value", t.Id, provider.Name))
+				rawKey = strings.TrimPrefix(fullKey, "sk-")
+				resolved = true
+			}
+			if !resolved {
+				// Try GET /api/token/:id (single token detail may return full key)
+				detailKey, err := client.GetTokenDetail(t.Id)
+				if err == nil && detailKey != "" && !model.IsMaskedKey(detailKey) {
+					rawKey = strings.TrimPrefix(detailKey, "sk-")
+					resolved = true
 				}
+			}
+			if !resolved {
+				// Fallback: preserve existing local key
+				existing, _ := model.GetProviderTokenByUpstream(provider.Id, t.Id)
+				if existing != nil && len(existing.SkKey) > 3 && !model.IsMaskedKey(existing.SkKey) {
+					rawKey = strings.TrimPrefix(existing.SkKey, "sk-")
+					resolved = true
+				}
+			}
+			if !resolved {
+				common.SysLog(fmt.Sprintf("[sync-token] WARNING: could not resolve full key for upstream token %d of provider %s (upstream_key=%q), skipping sk_key update", t.Id, provider.Name, t.Key))
+				// Skip this token's sk_key update — only update metadata
+				existing, _ := model.GetProviderTokenByUpstream(provider.Id, t.Id)
+				if existing != nil {
+					existing.Name = t.Name
+					existing.GroupName = t.Group
+					existing.Status = t.Status
+					existing.Priority = provider.Priority
+					existing.Weight = provider.Weight
+					existing.RemainQuota = t.RemainQuota
+					existing.UnlimitedQuota = t.UnlimitedQuota
+					existing.UsedQuota = t.UsedQuota
+					existing.ModelLimits = t.ModelLimits
+					existing.LastSynced = time.Now().Unix()
+					_ = existing.Update()
+				}
+				continue
 			}
 		}
 
+		skKey := "sk-" + rawKey
 		pt := &model.ProviderToken{
 			ProviderId:      provider.Id,
 			UpstreamTokenId: t.Id,
-			SkKey:           "sk-" + rawKey,
+			SkKey:           skKey,
 			Name:            t.Name,
 			GroupName:       t.Group,
 			Status:          t.Status,
