@@ -740,7 +740,8 @@ func UpdateProviderToken(c *gin.Context) {
 		return
 	}
 	token.Id = tokenId
-	if err := token.Update(); err != nil {
+	// Use UpdateMetadataOnly to prevent sk_key overwrite from frontend
+	if err := token.UpdateMetadataOnly(); err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}

@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -54,7 +55,38 @@ func (pt *ProviderToken) Insert() error {
 }
 
 func (pt *ProviderToken) Update() error {
-	if err := DB.Model(pt).Updates(pt).Error; err != nil {
+	updates := map[string]interface{}{
+		"provider_id":       pt.ProviderId,
+		"upstream_token_id": pt.UpstreamTokenId,
+		"sk_key":            pt.SkKey,
+		"name":              pt.Name,
+		"group_name":        pt.GroupName,
+		"status":            pt.Status,
+		"priority":          pt.Priority,
+		"weight":            pt.Weight,
+		"remain_quota":      pt.RemainQuota,
+		"unlimited_quota":   pt.UnlimitedQuota,
+		"used_quota":        pt.UsedQuota,
+		"model_limits":      pt.ModelLimits,
+		"last_synced":       pt.LastSynced,
+	}
+	if err := DB.Model(pt).Updates(updates).Error; err != nil {
+		return err
+	}
+	invalidateModelRouteCaches()
+	return nil
+}
+
+// UpdateMetadataOnly updates all fields except sk_key, preventing frontend overwrites.
+func (pt *ProviderToken) UpdateMetadataOnly() error {
+	updates := map[string]interface{}{
+		"name":       pt.Name,
+		"group_name": pt.GroupName,
+		"status":     pt.Status,
+		"priority":   pt.Priority,
+		"weight":     pt.Weight,
+	}
+	if err := DB.Model(pt).Updates(updates).Error; err != nil {
 		return err
 	}
 	invalidateModelRouteCaches()
@@ -117,4 +149,19 @@ func (pt *ProviderToken) CleanForResponse() {
 	if len(pt.SkKey) > 8 {
 		pt.SkKey = pt.SkKey[:4] + "****" + pt.SkKey[len(pt.SkKey)-4:]
 	}
+}
+
+// IsMaskedKey returns true if the key contains consecutive asterisks (upstream masked).
+func IsMaskedKey(key string) bool {
+	return strings.Contains(key, "**")
+}
+
+// GetProviderTokenByUpstream retrieves an existing token by provider_id + upstream_token_id.
+func GetProviderTokenByUpstream(providerId int, upstreamTokenId int) (*ProviderToken, error) {
+	var token ProviderToken
+	result := DB.Where("provider_id = ? AND upstream_token_id = ?", providerId, upstreamTokenId).First(&token)
+	if result.RowsAffected == 0 {
+		return nil, nil
+	}
+	return &token, result.Error
 }

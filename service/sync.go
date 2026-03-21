@@ -157,10 +157,29 @@ func syncTokens(client *UpstreamClient, provider *model.Provider) error {
 	var upstreamIds []int
 	for _, t := range allTokens {
 		upstreamIds = append(upstreamIds, t.Id)
+
+		// Resolve the real sk_key
+		rawKey := t.Key
+		if model.IsMaskedKey(rawKey) {
+			// Upstream returned a masked key — try to fetch the full key
+			fullKey, err := client.GetTokenKey(t.Id)
+			if err == nil && fullKey != "" && !model.IsMaskedKey(fullKey) {
+				rawKey = fullKey
+			} else {
+				// Fallback: preserve the existing local key if available
+				existing, _ := model.GetProviderTokenByUpstream(provider.Id, t.Id)
+				if existing != nil && existing.SkKey != "" && !model.IsMaskedKey(existing.SkKey) {
+					rawKey = existing.SkKey[len("sk-"):] // strip prefix for re-assembly
+				} else {
+					common.SysLog(fmt.Sprintf("warning: unable to resolve full key for upstream token %d of provider %s, storing masked value", t.Id, provider.Name))
+				}
+			}
+		}
+
 		pt := &model.ProviderToken{
 			ProviderId:      provider.Id,
 			UpstreamTokenId: t.Id,
-			SkKey:           "sk-" + t.Key,
+			SkKey:           "sk-" + rawKey,
 			Name:            t.Name,
 			GroupName:       t.Group,
 			Status:          t.Status,

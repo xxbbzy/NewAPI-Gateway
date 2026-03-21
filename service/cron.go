@@ -38,6 +38,14 @@ func StartCronJobs() {
 
 	go RunScheduledCheckinIfNeeded(time.Now())
 	go EvaluateBackupScheduleIfNeeded(time.Now())
+
+	// Delayed initial sync to fix existing dirty sk_keys on upgrade
+	go func() {
+		time.Sleep(10 * time.Second)
+		common.SysLog("running initial provider sync on startup")
+		syncAllProviders()
+	}()
+
 	common.SysLog("cron jobs started: sync every 5m, scheduled checkin evaluated every 1m, backup scheduler evaluated every 1m")
 }
 

@@ -263,6 +263,27 @@ func (c *UpstreamClient) GetTokens(page int, pageSize int) (*UpstreamTokenPage, 
 	return &pageInfo, nil
 }
 
+// GetTokenKey fetches the full unmasked key for a token via GET /api/token/:id/key
+func (c *UpstreamClient) GetTokenKey(tokenId int) (string, error) {
+	path := fmt.Sprintf("/api/token/%d/key", tokenId)
+	body, err := c.doRequest("GET", path)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+		Data    string `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", err
+	}
+	if !resp.Success {
+		return "", fmt.Errorf("upstream get token key failed: %s", resp.Message)
+	}
+	return resp.Data, nil
+}
+
 // CreateUpstreamToken calls upstream POST /api/token/ to create a new token
 func (c *UpstreamClient) CreateUpstreamToken(name string, group string, unlimitedQuota bool, remainQuota int64, modelLimits string) error {
 	payload := map[string]interface{}{

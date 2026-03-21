@@ -535,8 +535,8 @@ func TestPluginProviderTokenLifecycleCreateUpdateDelete(t *testing.T) {
 		t.Fatalf("expected existing synced token for lifecycle update/delete, err=%v", err)
 	}
 
-	// Update (plugin namespace) should update local fields.
-	updateBody := fmt.Sprintf(`{"provider_id":%d,"name":"plugin-updated-token","group_name":"default","status":1,"priority":6,"weight":12}`, provider.Id)
+	// Update (plugin namespace) should update local fields but NOT sk_key.
+	updateBody := fmt.Sprintf(`{"provider_id":%d,"name":"plugin-updated-token","group_name":"default","status":1,"priority":6,"weight":12,"sk_key":"sk-EVIL_OVERWRITE"}`, provider.Id)
 	updateRecorder := httptest.NewRecorder()
 	updatePath := fmt.Sprintf("/api/plugin/provider/token/%d", existing.Id)
 	router.ServeHTTP(updateRecorder, newJSONRequest(http.MethodPut, updatePath, updateBody, admin.Token, nil))
@@ -551,6 +551,13 @@ func TestPluginProviderTokenLifecycleCreateUpdateDelete(t *testing.T) {
 	}
 	if updatedToken.Name != "plugin-updated-token" || updatedToken.Priority != 6 || updatedToken.Weight != 12 {
 		t.Fatalf("unexpected updated token content: %+v", updatedToken)
+	}
+	// sk_key must NOT have been overwritten by the frontend value
+	if updatedToken.SkKey == "sk-EVIL_OVERWRITE" {
+		t.Fatalf("sk_key was overwritten by frontend request — UpdateMetadataOnly should prevent this")
+	}
+	if updatedToken.SkKey != "sk-abcdefghijklmnop" {
+		t.Fatalf("expected preserved sk_key 'sk-abcdefghijklmnop', got %q", updatedToken.SkKey)
 	}
 
 	// Delete (plugin namespace) should delete upstream then local.
