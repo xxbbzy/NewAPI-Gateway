@@ -718,11 +718,32 @@ func CreateProviderToken(c *gin.Context) {
 	}
 	// Call upstream to create token (upstream generates SK key)
 	client := service.NewUpstreamClient(provider.BaseURL, provider.AccessToken, provider.UserID)
-	if err := client.CreateUpstreamToken(req.Name, req.GroupName, req.UnlimitedQuota, req.RemainQuota, req.ModelLimits); err != nil {
+	created, err := client.CreateUpstreamToken(req.Name, req.GroupName, req.UnlimitedQuota, req.RemainQuota, req.ModelLimits)
+	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "上游创建 Token 失败: " + err.Error()})
 		return
 	}
-	// Sync tokens back to get the newly created token
+	// Immediately store the token with the full key from the create response
+	if created != nil && created.Key != "" && !model.IsMaskedKey(created.Key) {
+		pt := &model.ProviderToken{
+			ProviderId:      providerId,
+			UpstreamTokenId: created.Id,
+			SkKey:           "sk-" + created.Key,
+			Name:            created.Name,
+			GroupName:       created.Group,
+			Status:          created.Status,
+			Priority:        provider.Priority,
+			Weight:          provider.Weight,
+			RemainQuota:     created.RemainQuota,
+			UnlimitedQuota:  created.UnlimitedQuota,
+			UsedQuota:       created.UsedQuota,
+			ModelLimits:     created.ModelLimits,
+		}
+		if insertErr := model.UpsertProviderToken(pt); insertErr != nil {
+			common.SysLog("failed to store created token locally: " + insertErr.Error())
+		}
+	}
+	// Sync tokens back to update any other metadata
 	syncProviderAfterTokenCreate(provider)
 	service.MarkBackupDirty(fmt.Sprintf("provider_token_create_upstream:%d", providerId))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Token 已在上游创建，正在同步回本地"})

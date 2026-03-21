@@ -284,8 +284,9 @@ func (c *UpstreamClient) GetTokenKey(tokenId int) (string, error) {
 	return resp.Data, nil
 }
 
-// CreateUpstreamToken calls upstream POST /api/token/ to create a new token
-func (c *UpstreamClient) CreateUpstreamToken(name string, group string, unlimitedQuota bool, remainQuota int64, modelLimits string) error {
+// CreateUpstreamToken calls upstream POST /api/token/ to create a new token.
+// Returns the created token (including full unmasked key) from the response.
+func (c *UpstreamClient) CreateUpstreamToken(name string, group string, unlimitedQuota bool, remainQuota int64, modelLimits string) (*UpstreamToken, error) {
 	payload := map[string]interface{}{
 		"name":                 name,
 		"group":                group,
@@ -297,16 +298,21 @@ func (c *UpstreamClient) CreateUpstreamToken(name string, group string, unlimite
 	}
 	body, err := c.doRequestWithBody("POST", "/api/token/", payload)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var resp UpstreamResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return err
+		return nil, err
 	}
 	if !resp.Success {
-		return fmt.Errorf("upstream create token failed: %s", resp.Message)
+		return nil, fmt.Errorf("upstream create token failed: %s", resp.Message)
 	}
-	return nil
+	// Parse the created token from the response data
+	var created UpstreamToken
+	if resp.Data != nil {
+		_ = json.Unmarshal(resp.Data, &created)
+	}
+	return &created, nil
 }
 
 // DeleteUpstreamToken calls upstream DELETE /api/token/:id to remove a token.
