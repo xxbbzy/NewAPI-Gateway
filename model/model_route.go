@@ -312,6 +312,9 @@ func BuildRouteAttemptsByPriority(modelName string) ([][]RouteAttempt, error) {
 			if provider.Status != common.UserStatusEnabled || token.Status != common.UserStatusEnabled {
 				continue
 			}
+			if !token.CanParticipateInRouting() {
+				continue
+			}
 			if !provider.CanParticipateInAutomatedUseAt(now) {
 				continue
 			}

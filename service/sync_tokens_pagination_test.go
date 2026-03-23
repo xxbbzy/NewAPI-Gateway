@@ -104,12 +104,11 @@ func TestSyncTokensIncludesFirstPageAndDeduplicates(t *testing.T) {
 	}
 }
 
-func TestSyncTokensFetchesFullKeyWhenMasked(t *testing.T) {
+func TestSyncTokensFetchesDetailWhenListKeyMasked(t *testing.T) {
 	originDB := model.DB
 	model.DB = prepareSyncTokenPaginationTestDB(t)
 	defer func() { model.DB = originDB }()
 
-	// Mock upstream: /api/token/ returns masked key, /api/token/:id/key returns full key
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -125,10 +124,13 @@ func TestSyncTokensFetchesFullKeyWhenMasked(t *testing.T) {
 				},
 			}
 			_ = json.NewEncoder(w).Encode(payload)
-		case r.URL.Path == "/api/token/1/key" && r.Method == http.MethodGet:
+		case r.URL.Path == "/api/token/1" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
-				"data":    "T32rABCDEFGHIJKLXQMn",
+				"message": "",
+				"data": map[string]interface{}{
+					"id": 1, "key": "T32rABCDEFGHIJKLXQMn", "name": "t1", "status": 1, "group": "g1",
+				},
 			})
 		default:
 			http.NotFound(w, r)
@@ -152,26 +154,16 @@ func TestSyncTokensFetchesFullKeyWhenMasked(t *testing.T) {
 	if tokens[0].SkKey != "sk-T32rABCDEFGHIJKLXQMn" {
 		t.Fatalf("expected full sk_key 'sk-T32rABCDEFGHIJKLXQMn', got %q", tokens[0].SkKey)
 	}
+	if tokens[0].KeyStatus != model.ProviderTokenKeyStatusReady {
+		t.Fatalf("expected ready key_status, got %q", tokens[0].KeyStatus)
+	}
 }
 
-func TestSyncTokensPreservesExistingKeyWhenFetchFails(t *testing.T) {
+func TestSyncTokensMarksUnresolvedWhenPlaintextUnavailable(t *testing.T) {
 	originDB := model.DB
 	model.DB = prepareSyncTokenPaginationTestDB(t)
 	defer func() { model.DB = originDB }()
 
-	// Seed an existing token with a real key
-	if err := model.DB.Create(&model.ProviderToken{
-		ProviderId:      1,
-		UpstreamTokenId: 42,
-		SkKey:           "sk-RealFullKeyValue123",
-		Name:            "existing",
-		GroupName:       "default",
-		Status:          1,
-	}).Error; err != nil {
-		t.Fatalf("seed existing token failed: %v", err)
-	}
-
-	// Mock: /api/token/ returns masked key, /api/token/42/key returns 404
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -182,11 +174,19 @@ func TestSyncTokensPreservesExistingKeyWhenFetchFails(t *testing.T) {
 				"data": map[string]interface{}{
 					"page": 0, "page_size": 100, "total": 1,
 					"items": []map[string]interface{}{
-						{"id": 42, "key": "Real**********e123", "name": "existing-updated", "status": 1, "group": "default"},
+						{"id": 7, "key": "abc********xyz", "name": "new-unresolved", "status": 1, "group": "default"},
 					},
 				},
 			}
 			_ = json.NewEncoder(w).Encode(payload)
+		case r.URL.Path == "/api/token/7" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"id": 7, "key": "", "name": "new-unresolved", "status": 1, "group": "default",
+				},
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -194,21 +194,165 @@ func TestSyncTokensPreservesExistingKeyWhenFetchFails(t *testing.T) {
 	defer server.Close()
 
 	client := NewUpstreamClient(server.URL, "token", 1)
-	provider := &model.Provider{Id: 1, Name: "p-preserve", Priority: 0, Weight: 10}
+	provider := &model.Provider{Id: 1, Name: "p-unresolved", Priority: 0, Weight: 10}
 	if err := syncTokens(client, provider); err != nil {
 		t.Fatalf("syncTokens failed: %v", err)
 	}
 
 	var token model.ProviderToken
-	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", 1, 42).First(&token).Error; err != nil {
-		t.Fatalf("query token failed: %v", err)
+	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", 1, 7).First(&token).Error; err != nil {
+		t.Fatalf("query unresolved token failed: %v", err)
 	}
-	// Key should be preserved (not overwritten with masked value)
-	if token.SkKey != "sk-RealFullKeyValue123" {
-		t.Fatalf("expected preserved sk_key 'sk-RealFullKeyValue123', got %q", token.SkKey)
+	if token.SkKey != "" {
+		t.Fatalf("expected empty sk_key for unresolved token, got %q", token.SkKey)
 	}
-	// But name should be updated
-	if token.Name != "existing-updated" {
-		t.Fatalf("expected updated name 'existing-updated', got %q", token.Name)
+	if token.KeyStatus != model.ProviderTokenKeyStatusUnresolved {
+		t.Fatalf("expected unresolved key_status, got %q", token.KeyStatus)
+	}
+	if token.KeyUnresolvedReason != model.ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered {
+		t.Fatalf("unexpected unresolved reason: %q", token.KeyUnresolvedReason)
+	}
+}
+
+func TestSyncTokensPreservesExistingReadyKeyWhenUpstreamStillUnresolved(t *testing.T) {
+	originDB := model.DB
+	model.DB = prepareSyncTokenPaginationTestDB(t)
+	defer func() { model.DB = originDB }()
+
+	if err := model.DB.Create(&model.ProviderToken{
+		ProviderId:          1,
+		UpstreamTokenId:     8,
+		SkKey:               "sk-existing-plaintext",
+		KeyStatus:           model.ProviderTokenKeyStatusReady,
+		KeyUnresolvedReason: "",
+		Name:                "legacy-name",
+		GroupName:           "default",
+		Status:              1,
+		Priority:            0,
+		Weight:              10,
+	}).Error; err != nil {
+		t.Fatalf("seed ready token failed: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/token/" && r.Method == http.MethodGet:
+			payload := map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"page": 0, "page_size": 100, "total": 1,
+					"items": []map[string]interface{}{
+						{"id": 8, "key": "abc********xyz", "name": "updated-name", "status": 1, "group": "default"},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(payload)
+		case r.URL.Path == "/api/token/8" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"id": 8, "key": "", "name": "updated-name", "status": 1, "group": "default",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewUpstreamClient(server.URL, "token", 1)
+	provider := &model.Provider{Id: 1, Name: "p-preserve-ready", Priority: 0, Weight: 10}
+	if err := syncTokens(client, provider); err != nil {
+		t.Fatalf("syncTokens failed: %v", err)
+	}
+
+	var token model.ProviderToken
+	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", 1, 8).First(&token).Error; err != nil {
+		t.Fatalf("query preserved token failed: %v", err)
+	}
+	if token.SkKey != "sk-existing-plaintext" {
+		t.Fatalf("expected existing plaintext key to be preserved, got %q", token.SkKey)
+	}
+	if token.KeyStatus != model.ProviderTokenKeyStatusReady {
+		t.Fatalf("expected ready key_status after preserve, got %q", token.KeyStatus)
+	}
+	if token.KeyUnresolvedReason != "" {
+		t.Fatalf("expected empty unresolved reason for preserved ready key, got %q", token.KeyUnresolvedReason)
+	}
+	if token.Name != "updated-name" {
+		t.Fatalf("expected metadata update to keep latest upstream name, got %q", token.Name)
+	}
+}
+
+func TestSyncTokensRepairsContaminatedRowWhenDetailReturnsPlaintext(t *testing.T) {
+	originDB := model.DB
+	model.DB = prepareSyncTokenPaginationTestDB(t)
+	defer func() { model.DB = originDB }()
+
+	if err := model.DB.Create(&model.ProviderToken{
+		ProviderId:          1,
+		UpstreamTokenId:     9,
+		SkKey:               "abc********xyz",
+		KeyStatus:           model.ProviderTokenKeyStatusUnresolved,
+		KeyUnresolvedReason: model.ProviderTokenKeyUnresolvedReasonLegacyContaminated,
+		Name:                "dirty-token",
+		GroupName:           "default",
+		Status:              1,
+		Priority:            0,
+		Weight:              10,
+	}).Error; err != nil {
+		t.Fatalf("seed contaminated token failed: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/token/" && r.Method == http.MethodGet:
+			payload := map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"page": 0, "page_size": 100, "total": 1,
+					"items": []map[string]interface{}{
+						{"id": 9, "key": "abc********xyz", "name": "dirty-token", "status": 1, "group": "default"},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(payload)
+		case r.URL.Path == "/api/token/9" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"id": 9, "key": "RESTOREDPLAINTEXT", "name": "dirty-token", "status": 1, "group": "default",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewUpstreamClient(server.URL, "token", 1)
+	provider := &model.Provider{Id: 1, Name: "p-repair-dirty", Priority: 0, Weight: 10}
+	if err := syncTokens(client, provider); err != nil {
+		t.Fatalf("syncTokens failed: %v", err)
+	}
+
+	var token model.ProviderToken
+	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", 1, 9).First(&token).Error; err != nil {
+		t.Fatalf("query repaired token failed: %v", err)
+	}
+	if token.SkKey != "sk-RESTOREDPLAINTEXT" {
+		t.Fatalf("expected repaired plaintext key, got %q", token.SkKey)
+	}
+	if token.KeyStatus != model.ProviderTokenKeyStatusReady {
+		t.Fatalf("expected ready key_status after repair, got %q", token.KeyStatus)
+	}
+	if token.KeyUnresolvedReason != "" {
+		t.Fatalf("expected unresolved reason cleared after repair, got %q", token.KeyUnresolvedReason)
 	}
 }

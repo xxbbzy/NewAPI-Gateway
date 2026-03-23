@@ -225,6 +225,78 @@ func TestPluginProviderAdminTokenSuccessAndRedaction(t *testing.T) {
 	if skValue != rawSk {
 		t.Fatalf("expected full plaintext sk_key %q, got %q", rawSk, skValue)
 	}
+	keyStatus, _ := tokens[0]["key_status"].(string)
+	if keyStatus != model.ProviderTokenKeyStatusReady {
+		t.Fatalf("expected ready key_status, got %q", keyStatus)
+	}
+	if unresolvedReason, _ := tokens[0]["key_unresolved_reason"].(string); unresolvedReason != "" {
+		t.Fatalf("expected empty unresolved reason for ready token, got %q", unresolvedReason)
+	}
+}
+
+func TestPluginProviderTokenListShowsUnresolvedStateWithoutMaskedKey(t *testing.T) {
+	restoreRateLimiter := forceInMemoryRateLimiter()
+	defer restoreRateLimiter()
+
+	originDB := model.DB
+	model.DB = preparePluginProviderRouterTestDB(t)
+	defer func() { model.DB = originDB }()
+
+	admin, _, provider, _ := seedUsersAndProviderForPluginTests(t, "https://example.invalid")
+	if err := model.DB.Create(&model.ProviderToken{
+		ProviderId:          provider.Id,
+		UpstreamTokenId:     101,
+		SkKey:               "abc********xyz",
+		KeyStatus:           model.ProviderTokenKeyStatusUnresolved,
+		KeyUnresolvedReason: model.ProviderTokenKeyUnresolvedReasonLegacyContaminated,
+		Name:                "token-unresolved",
+		GroupName:           "default",
+		Status:              1,
+		Priority:            0,
+		Weight:              10,
+	}).Error; err != nil {
+		t.Fatalf("seed unresolved provider token failed: %v", err)
+	}
+	if err := model.BackfillProviderTokenKeyState(); err != nil {
+		t.Fatalf("backfill provider token key state failed: %v", err)
+	}
+
+	router := buildPluginProviderRouterTestServer(admin)
+	tokenRecorder := httptest.NewRecorder()
+	path := fmt.Sprintf("/api/plugin/provider/%d/tokens", provider.Id)
+	router.ServeHTTP(tokenRecorder, newRequest(http.MethodGet, path, admin.Token, nil))
+	tokenResp := decodeManagementEnvelope(t, tokenRecorder)
+	if !tokenResp.Success {
+		t.Fatalf("expected plugin provider tokens success, got message=%s", tokenResp.Message)
+	}
+
+	var tokens []map[string]interface{}
+	if err := json.Unmarshal(tokenResp.Data, &tokens); err != nil {
+		t.Fatalf("decode token list failed: %v", err)
+	}
+	if len(tokens) != 2 {
+		t.Fatalf("expected two provider tokens, got %d", len(tokens))
+	}
+
+	var unresolved map[string]interface{}
+	for _, token := range tokens {
+		if token["upstream_token_id"] == float64(101) {
+			unresolved = token
+			break
+		}
+	}
+	if unresolved == nil {
+		t.Fatalf("expected unresolved token in response: %+v", tokens)
+	}
+	if skValue, _ := unresolved["sk_key"].(string); skValue != "" {
+		t.Fatalf("expected unresolved token sk_key to be empty, got %q", skValue)
+	}
+	if keyStatus, _ := unresolved["key_status"].(string); keyStatus != model.ProviderTokenKeyStatusUnresolved {
+		t.Fatalf("expected unresolved key_status, got %q", keyStatus)
+	}
+	if reason, _ := unresolved["key_unresolved_reason"].(string); reason != model.ProviderTokenKeyUnresolvedReasonLegacyContaminated {
+		t.Fatalf("unexpected unresolved reason: %q", reason)
+	}
 }
 
 func TestPluginProviderRejectsNonAdminToken(t *testing.T) {
@@ -362,7 +434,7 @@ func TestPluginProviderSyncTriggerReturnsAsyncSuccessMessage(t *testing.T) {
 	if !resp.Success {
 		t.Fatalf("expected plugin sync trigger success, got message=%s", resp.Message)
 	}
-	if resp.Message != "同步任务已启动" {
+	if resp.Message != "同步任务已启动，请稍后在令牌列表查看 key_status 恢复结果" {
 		t.Fatalf("expected async trigger message, got %s", resp.Message)
 	}
 
@@ -477,9 +549,11 @@ func TestPluginProviderTokenLifecycleCreateUpdateDelete(t *testing.T) {
 	model.DB = preparePluginProviderRouterTestDB(t)
 	defer func() { model.DB = originDB }()
 
+	created := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			created = true
 			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{}}`))
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/token/"):
 			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{}}`))
@@ -491,11 +565,11 @@ func TestPluginProviderTokenLifecycleCreateUpdateDelete(t *testing.T) {
 			if page == "" {
 				page = "0"
 			}
-			if page == "0" {
+			if page == "0" && created {
 				_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"page":0,"page_size":100,"total":1,"items":[{"id":100,"key":"abcdefghijklmnop","name":"token-a","status":1,"group":"default","remain_quota":1,"unlimited_quota":true,"used_quota":0,"model_limits_enabled":false,"model_limits":""}]}}`))
 				return
 			}
-			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"page":1,"page_size":100,"total":1,"items":[]}}`))
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"page":1,"page_size":100,"total":0,"items":[]}}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/user/self":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"id":1,"quota":0,"status":1}}`))
 		default:
@@ -514,7 +588,7 @@ func TestPluginProviderTokenLifecycleCreateUpdateDelete(t *testing.T) {
 	}
 	router := buildPluginProviderRouterTestServer(admin)
 
-	// Create (plugin namespace) should call upstream and return async sync message.
+	// Create (plugin namespace) should call upstream and return reconciliation outcome.
 	createBody := `{"name":"created-by-plugin","group_name":"default","unlimited_quota":true,"remain_quota":0}`
 	createRecorder := httptest.NewRecorder()
 	createPath := fmt.Sprintf("/api/plugin/provider/%d/tokens", provider.Id)
@@ -523,11 +597,30 @@ func TestPluginProviderTokenLifecycleCreateUpdateDelete(t *testing.T) {
 	if !createResp.Success {
 		t.Fatalf("expected plugin token create success, got message=%s", createResp.Message)
 	}
-	if createResp.Message != "Token 已在上游创建并同步完成" {
+	if createResp.Message != "Token 已在上游创建，密钥已同步，可在列表中复制" {
 		t.Fatalf("unexpected create message: %s", createResp.Message)
 	}
+	var createData struct {
+		UpstreamCreated        bool   `json:"upstream_created"`
+		CreatedTokenIdentified bool   `json:"created_token_identified"`
+		ProviderTokenId        int    `json:"provider_token_id"`
+		UpstreamTokenId        int    `json:"upstream_token_id"`
+		KeyStatus              string `json:"key_status"`
+		KeyUnresolvedReason    string `json:"key_unresolved_reason"`
+	}
+	if err := json.Unmarshal(createResp.Data, &createData); err != nil {
+		t.Fatalf("decode create data failed: %v", err)
+	}
+	if !createData.UpstreamCreated || !createData.CreatedTokenIdentified {
+		t.Fatalf("unexpected create outcome: %+v", createData)
+	}
+	if createData.UpstreamTokenId != 100 || createData.ProviderTokenId == 0 {
+		t.Fatalf("unexpected create ids: %+v", createData)
+	}
+	if createData.KeyStatus != model.ProviderTokenKeyStatusReady || createData.KeyUnresolvedReason != "" {
+		t.Fatalf("unexpected create key state: %+v", createData)
+	}
 
-	// Sync is now synchronous in CreateProviderToken, no need to wait.
 	var existing model.ProviderToken
 	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", provider.Id, 100).First(&existing).Error; err != nil {
 		t.Fatalf("expected existing synced token for lifecycle update/delete, err=%v", err)

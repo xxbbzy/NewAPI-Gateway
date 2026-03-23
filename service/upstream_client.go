@@ -97,6 +97,11 @@ type UpstreamTokenPage struct {
 	Items    []UpstreamToken `json:"items"`
 }
 
+type UpstreamTokenCreateResult struct {
+	Message string
+	Token   *UpstreamToken
+}
+
 // UpstreamUserSelf mirrors partial user/self response
 type UpstreamUserSelf struct {
 	Id      int   `json:"id"`
@@ -263,51 +268,31 @@ func (c *UpstreamClient) GetTokens(page int, pageSize int) (*UpstreamTokenPage, 
 	return &pageInfo, nil
 }
 
-// GetTokenKey fetches the full unmasked key for a token via GET /api/token/:id/key
-func (c *UpstreamClient) GetTokenKey(tokenId int) (string, error) {
-	path := fmt.Sprintf("/api/token/%d/key", tokenId)
-	body, err := c.doRequest("GET", path)
-	if err != nil {
-		return "", err
-	}
-	var resp struct {
-		Success bool   `json:"success"`
-		Message string `json:"message"`
-		Data    string `json:"data"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", err
-	}
-	if !resp.Success {
-		return "", fmt.Errorf("upstream get token key failed: %s", resp.Message)
-	}
-	return resp.Data, nil
-}
-
 // GetTokenDetail fetches a single token via GET /api/token/:id.
-// Many New API forks return the full key in the detail response (no Clean/mask).
-func (c *UpstreamClient) GetTokenDetail(tokenId int) (string, error) {
+// Official new-api detail responses are an authoritative source for plaintext key recovery.
+func (c *UpstreamClient) GetTokenDetail(tokenId int) (*UpstreamToken, error) {
 	path := fmt.Sprintf("/api/token/%d", tokenId)
 	body, err := c.doRequest("GET", path)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var resp struct {
 		Success bool          `json:"success"`
+		Message string        `json:"message"`
 		Data    UpstreamToken `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return "", err
+		return nil, err
 	}
-	if !resp.Success || resp.Data.Key == "" {
-		return "", fmt.Errorf("upstream get token detail failed or key empty")
+	if !resp.Success {
+		return nil, fmt.Errorf("upstream get token detail failed: %s", resp.Message)
 	}
-	return resp.Data.Key, nil
+	return &resp.Data, nil
 }
 
 // CreateUpstreamToken calls upstream POST /api/token/ to create a new token.
-// Returns the created token (including full unmasked key) from the response.
-func (c *UpstreamClient) CreateUpstreamToken(name string, group string, unlimitedQuota bool, remainQuota int64, modelLimits string) (*UpstreamToken, error) {
+// Official new-api may return success without a created token payload.
+func (c *UpstreamClient) CreateUpstreamToken(name string, group string, unlimitedQuota bool, remainQuota int64, modelLimits string) (*UpstreamTokenCreateResult, error) {
 	payload := map[string]interface{}{
 		"name":                 name,
 		"group":                group,
@@ -328,12 +313,17 @@ func (c *UpstreamClient) CreateUpstreamToken(name string, group string, unlimite
 	if !resp.Success {
 		return nil, fmt.Errorf("upstream create token failed: %s", resp.Message)
 	}
-	// Parse the created token from the response data
-	var created UpstreamToken
-	if resp.Data != nil {
-		_ = json.Unmarshal(resp.Data, &created)
+	result := &UpstreamTokenCreateResult{Message: resp.Message}
+	if len(resp.Data) == 0 || string(resp.Data) == "null" {
+		return result, nil
 	}
-	return &created, nil
+	var created UpstreamToken
+	if err := json.Unmarshal(resp.Data, &created); err == nil {
+		if created.Id != 0 || strings.TrimSpace(created.Key) != "" || strings.TrimSpace(created.Name) != "" || strings.TrimSpace(created.Group) != "" || created.Status != 0 || created.RemainQuota != 0 || created.UnlimitedQuota || created.UsedQuota != 0 || strings.TrimSpace(created.ModelLimits) != "" {
+			result.Token = &created
+		}
+	}
+	return result, nil
 }
 
 // DeleteUpstreamToken calls upstream DELETE /api/token/:id to remove a token.

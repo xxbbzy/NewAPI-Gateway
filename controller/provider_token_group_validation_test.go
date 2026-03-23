@@ -197,23 +197,23 @@ func TestCreateProviderTokenAcceptsValidGroup(t *testing.T) {
 	model.DB = prepareProviderTokenValidationTestDB(t)
 	defer func() { model.DB = originDB }()
 
-	originSyncProviderAfterTokenCreate := syncProviderAfterTokenCreate
-	syncProviderAfterTokenCreate = func(provider *model.Provider) {}
-	defer func() {
-		syncProviderAfterTokenCreate = originSyncProviderAfterTokenCreate
-	}()
-
 	gin.SetMode(gin.TestMode)
+	created := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			created = true
 			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{}}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/pricing":
-			_, _ = w.Write([]byte(`{"success":true,"data":[],"group_ratio":{},"usable_group":{},"supported_endpoint":{}}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
-			_, _ = w.Write([]byte(`{"success":true,"data":{"items":[],"total":0}}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/user/self":
-			_, _ = w.Write([]byte(`{"success":true,"data":{"id":1,"quota":0,"status":1}}`))
+			page := r.URL.Query().Get("p")
+			if page == "" {
+				page = "0"
+			}
+			if !created || page != "0" {
+				_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"page":1,"page_size":100,"total":0,"items":[]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"page":0,"page_size":100,"total":1,"items":[{"id":101,"key":"abcdefghijklmnop","name":"demo","status":1,"group":"default","remain_quota":0,"unlimited_quota":true,"used_quota":0,"model_limits_enabled":false,"model_limits":""}]}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -229,11 +229,38 @@ func TestCreateProviderTokenAcceptsValidGroup(t *testing.T) {
 	var validResp struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
+		Data    struct {
+			UpstreamCreated        bool   `json:"upstream_created"`
+			CreatedTokenIdentified bool   `json:"created_token_identified"`
+			ProviderTokenId        int    `json:"provider_token_id"`
+			UpstreamTokenId        int    `json:"upstream_token_id"`
+			KeyStatus              string `json:"key_status"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(recorderValid.Body.Bytes(), &validResp); err != nil {
 		t.Fatalf("unmarshal valid-group response failed: %v", err)
 	}
 	if !validResp.Success {
 		t.Fatalf("expected valid group to pass, got message: %s", validResp.Message)
+	}
+	if validResp.Data.UpstreamCreated != true || validResp.Data.CreatedTokenIdentified != true {
+		t.Fatalf("expected create outcome to confirm upstream create and identification, got %+v", validResp.Data)
+	}
+	if validResp.Data.UpstreamTokenId != 101 || validResp.Data.ProviderTokenId == 0 {
+		t.Fatalf("unexpected create outcome ids: %+v", validResp.Data)
+	}
+	if validResp.Data.KeyStatus != model.ProviderTokenKeyStatusReady {
+		t.Fatalf("expected ready key status, got %+v", validResp.Data)
+	}
+	if !strings.Contains(validResp.Message, "密钥已同步") {
+		t.Fatalf("unexpected success message: %s", validResp.Message)
+	}
+
+	stored, err := model.GetProviderTokenById(validResp.Data.ProviderTokenId)
+	if err != nil {
+		t.Fatalf("load created provider token failed: %v", err)
+	}
+	if stored.UpstreamTokenId != 101 || stored.SkKey != "sk-abcdefghijklmnop" {
+		t.Fatalf("unexpected stored token state: %+v", stored)
 	}
 }

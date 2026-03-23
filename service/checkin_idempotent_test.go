@@ -21,7 +21,7 @@ func prepareServiceCheckinTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open test db failed: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Provider{}, &model.CheckinRun{}, &model.CheckinRunItem{}); err != nil {
+	if err := db.AutoMigrate(&model.Provider{}, &model.ProviderToken{}, &model.CheckinRun{}, &model.CheckinRunItem{}); err != nil {
 		t.Fatalf("migrate test db failed: %v", err)
 	}
 	return db

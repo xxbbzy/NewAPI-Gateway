@@ -18,6 +18,47 @@ import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import Tabs from '../../components/ui/Tabs';
 
+const PROVIDER_TOKEN_KEY_STATUS_READY = 'ready';
+const PROVIDER_TOKEN_KEY_STATUS_UNRESOLVED = 'unresolved';
+
+const normalizeProviderTokenKeyStatus = (token) => {
+    const status = String(token?.key_status || '').trim().toLowerCase();
+    if (status === PROVIDER_TOKEN_KEY_STATUS_READY || status === PROVIDER_TOKEN_KEY_STATUS_UNRESOLVED) {
+        return status;
+    }
+    const key = String(token?.sk_key || '').trim();
+    if (key && !key.includes('**')) {
+        return PROVIDER_TOKEN_KEY_STATUS_READY;
+    }
+    return PROVIDER_TOKEN_KEY_STATUS_UNRESOLVED;
+};
+
+const resolveProviderTokenCreateSuccessMessage = (message, outcome) => {
+    const fallbackReadyMessage = 'Token 已在上游创建，密钥已同步，可在列表中复制';
+    const fallbackUnresolvedMessage = 'Token 已在上游创建，但明文密钥暂未恢复，请稍后同步后重试';
+    if (!outcome || !outcome.upstream_created) {
+        return message || '令牌创建成功';
+    }
+    if (outcome.key_status === PROVIDER_TOKEN_KEY_STATUS_READY) {
+        return message || fallbackReadyMessage;
+    }
+    return message || fallbackUnresolvedMessage;
+};
+
+const providerTokenUnresolvedReasonText = (reason) => {
+    const normalizedReason = String(reason || '').trim().toLowerCase();
+    if (normalizedReason === 'plaintext_not_recovered') {
+        return '上游尚未返回可用明文密钥';
+    }
+    if (normalizedReason === 'legacy_contaminated') {
+        return '历史密钥数据已污染，等待重新恢复';
+    }
+    if (normalizedReason === 'created_token_not_identified') {
+        return '已创建上游令牌，但暂未定位到新令牌记录';
+    }
+    return '明文密钥暂未恢复';
+};
+
 const ProviderDetail = () => {
     const { id } = useParams();
     const navigate = useNavigate();
@@ -171,8 +212,12 @@ const ProviderDetail = () => {
             else showError(message);
         } else {
             const res = await API.post(`/api/provider/${id}/tokens`, payload);
-            const { success, message } = res.data;
-            if (success) { showSuccess('令牌创建成功'); setShowTokenModal(false); loadTokens(); }
+            const { success, message, data } = res.data;
+            if (success) {
+                showSuccess(resolveProviderTokenCreateSuccessMessage(message, data));
+                setShowTokenModal(false);
+                loadTokens();
+            }
             else showError(message);
         }
     };
@@ -188,6 +233,30 @@ const ProviderDetail = () => {
     const renderStatus = (status) => {
         if (status === 1) return <Badge color="green">启用</Badge>;
         return <Badge color="red">禁用</Badge>;
+    };
+
+    const copyTokenKey = async (tokenId, key) => {
+        const normalizedKey = String(key || '').trim();
+        if (!normalizedKey) {
+            showError('当前令牌明文密钥未恢复，暂不可复制');
+            return;
+        }
+        if (!navigator?.clipboard?.writeText) {
+            showError('复制失败，请检查浏览器剪贴板权限');
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(normalizedKey);
+            const btn = document.getElementById(`copy-btn-${tokenId}`);
+            if (btn) {
+                btn.textContent = '✓';
+                setTimeout(() => {
+                    btn.textContent = '复制';
+                }, 1500);
+            }
+        } catch (e) {
+            showError('复制失败，请检查浏览器剪贴板权限');
+        }
     };
 
     const renderProviderHealth = (currentProvider) => {
@@ -510,32 +579,47 @@ const ProviderDetail = () => {
                             </Tr>
                         </Thead>
                         <Tbody>
-                            {tokens.map((t) => (
-                                <Tr key={t.id}>
-                                    <Td>{t.id}</Td>
-                                    <Td>{t.name || '-'}</Td>
-                                    <Td>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                            <code style={{ fontSize: '0.8rem', backgroundColor: 'var(--gray-100)', padding: '0.15rem 0.4rem', borderRadius: '0.25rem', wordBreak: 'break-all', userSelect: 'all' }}>{t.sk_key}</code>
-                                            <button
-                                                onClick={() => { navigator.clipboard.writeText(t.sk_key); const btn = document.getElementById(`copy-btn-${t.id}`); if (btn) { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '复制'; }, 1500); } }}
-                                                id={`copy-btn-${t.id}`}
-                                                style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', borderRadius: '0.2rem', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', cursor: 'pointer', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}
-                                            >复制</button>
-                                        </div>
-                                    </Td>
-                                    <Td>{t.group_name ? <Badge color="blue">{t.group_name}</Badge> : '-'}</Td>
-                                    <Td>{renderStatus(t.status)}</Td>
-                                    <Td>{t.unlimited_quota ? <Badge color="green">无限</Badge> : <span>{t.remain_quota}</span>}</Td>
-                                    <Td>{t.weight} / {t.priority}</Td>
-                                    <Td>
-                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                            <Button size="sm" variant="secondary" onClick={() => openEditToken(t)} title="编辑" icon={Edit} />
-                                            <Button size="sm" variant="danger" onClick={() => deleteToken(t.id)} title="删除" icon={Trash2} />
-                                        </div>
-                                    </Td>
-                                </Tr>
-                            ))}
+                            {tokens.map((t) => {
+                                const keyStatus = normalizeProviderTokenKeyStatus(t);
+                                const keyReady = keyStatus === PROVIDER_TOKEN_KEY_STATUS_READY;
+                                const unresolvedHint = providerTokenUnresolvedReasonText(t.key_unresolved_reason);
+                                return (
+                                    <Tr key={t.id}>
+                                        <Td>{t.id}</Td>
+                                        <Td>{t.name || '-'}</Td>
+                                        <Td>
+                                            {keyReady ? (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                    <code style={{ fontSize: '0.8rem', backgroundColor: 'var(--gray-100)', padding: '0.15rem 0.4rem', borderRadius: '0.25rem', wordBreak: 'break-all', userSelect: 'all' }}>{t.sk_key}</code>
+                                                    <button
+                                                        onClick={() => copyTokenKey(t.id, t.sk_key)}
+                                                        id={`copy-btn-${t.id}`}
+                                                        style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', borderRadius: '0.2rem', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', cursor: 'pointer', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}
+                                                    >复制</button>
+                                                </div>
+                                            ) : (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                        <Badge color="yellow">待恢复</Badge>
+                                                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>令牌已在上游创建，明文密钥暂不可复制</span>
+                                                    </div>
+                                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>原因：{unresolvedHint}</span>
+                                                </div>
+                                            )}
+                                        </Td>
+                                        <Td>{t.group_name ? <Badge color="blue">{t.group_name}</Badge> : '-'}</Td>
+                                        <Td>{renderStatus(t.status)}</Td>
+                                        <Td>{t.unlimited_quota ? <Badge color="green">无限</Badge> : <span>{t.remain_quota}</span>}</Td>
+                                        <Td>{t.weight} / {t.priority}</Td>
+                                        <Td>
+                                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                <Button size="sm" variant="secondary" onClick={() => openEditToken(t)} title="编辑" icon={Edit} />
+                                                <Button size="sm" variant="danger" onClick={() => deleteToken(t.id)} title="删除" icon={Trash2} />
+                                            </div>
+                                        </Td>
+                                    </Tr>
+                                );
+                            })}
                         </Tbody>
                     </Table>
                 )}

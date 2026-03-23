@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import ProviderDetail from './ProviderDetail';
-import { API, showError } from '../../helpers';
+import { API, showError, showSuccess } from '../../helpers';
 
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
@@ -199,5 +199,126 @@ describe('ProviderDetail token group form', () => {
     expect(container.textContent).toContain('签到');
     expect(container.textContent).toContain('最近结果：failed');
     expect(container.textContent).not.toContain('不可用');
+  });
+
+  it('shows unresolved create success messaging when key recovery is pending', async () => {
+    API.post.mockResolvedValueOnce({
+      data: {
+        success: true,
+        message: '',
+        data: {
+          upstream_created: true,
+          created_token_identified: true,
+          key_status: 'unresolved',
+        },
+      },
+    });
+
+    await act(async () => {
+      root.render(<ProviderDetail />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const createButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent.includes('创建上游令牌'));
+    expect(createButton).not.toBeNull();
+
+    await act(async () => {
+      createButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    const saveButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '保存');
+    expect(saveButton).not.toBeNull();
+
+    await act(async () => {
+      saveButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(showSuccess).toHaveBeenCalledWith('Token 已在上游创建，但明文密钥暂未恢复，请稍后同步后重试');
+  });
+
+  it('renders unresolved tokens as non-copyable with explicit recovery hints', async () => {
+    API.get.mockImplementation((url) => {
+      if (url === '/api/provider/1') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: {
+              id: 1,
+              name: 'Provider-A',
+              base_url: 'https://example.com',
+              status: 1,
+              checkin_enabled: false,
+              weight: 10,
+              priority: 0,
+              balance: '$0.00',
+            },
+          },
+        });
+      }
+      if (url === '/api/provider/1/tokens') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: [
+              {
+                id: 1,
+                name: 'ready-token',
+                sk_key: 'sk-ready-key',
+                key_status: 'ready',
+                group_name: 'default',
+                status: 1,
+                unlimited_quota: true,
+                remain_quota: 0,
+                priority: 0,
+                weight: 10,
+              },
+              {
+                id: 2,
+                name: 'pending-token',
+                sk_key: '',
+                key_status: 'unresolved',
+                key_unresolved_reason: 'plaintext_not_recovered',
+                group_name: 'vip',
+                status: 1,
+                unlimited_quota: false,
+                remain_quota: 99,
+                priority: 1,
+                weight: 8,
+              },
+            ],
+          },
+        });
+      }
+      if (url === '/api/provider/1/pricing') {
+        return Promise.resolve({
+          data: {
+            success: true,
+            data: [],
+            group_ratio: {},
+            token_group_options: [],
+            default_group: '',
+            supported_endpoint: {},
+          },
+        });
+      }
+      if (url === '/api/provider/1/model-alias-mapping') {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      return Promise.resolve({ data: { success: true, data: [] } });
+    });
+
+    await act(async () => {
+      root.render(<ProviderDetail />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(container.querySelector('#copy-btn-1')).not.toBeNull();
+    expect(container.querySelector('#copy-btn-2')).toBeNull();
+    expect(container.textContent).toContain('令牌已在上游创建，明文密钥暂不可复制');
+    expect(container.textContent).toContain('原因：上游尚未返回可用明文密钥');
   });
 });

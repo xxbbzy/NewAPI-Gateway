@@ -15,6 +15,29 @@ var syncTokensStep = syncTokens
 var syncBalanceStep = syncBalance
 var rebuildProviderRoutesForProvider = RebuildProviderRoutes
 
+type ProviderTokenReconcileResult struct {
+	UpstreamToken              UpstreamToken
+	ProviderToken              *model.ProviderToken
+	ExistingLocalKeyPreserved  bool
+	RecoveredFrom              string
+}
+
+type ProviderTokenSyncSummary struct {
+	ResultsByUpstreamID map[int]*ProviderTokenReconcileResult
+	Total              int
+	ReadyCount         int
+	UnresolvedCount    int
+}
+
+type ProviderTokenCreateOutcome struct {
+	UpstreamCreated        bool   `json:"upstream_created"`
+	CreatedTokenIdentified bool   `json:"created_token_identified"`
+	ProviderTokenId        int    `json:"provider_token_id,omitempty"`
+	UpstreamTokenId        int    `json:"upstream_token_id,omitempty"`
+	KeyStatus              string `json:"key_status,omitempty"`
+	KeyUnresolvedReason    string `json:"key_unresolved_reason,omitempty"`
+}
+
 // SyncProvider synchronizes pricing, tokens, and balance from an upstream provider
 func SyncProvider(provider *model.Provider) error {
 	client, err := newUpstreamClientForProvider(provider)
@@ -121,8 +144,7 @@ func syncPricing(client *UpstreamClient, provider *model.Provider) error {
 	return nil
 }
 
-func syncTokens(client *UpstreamClient, provider *model.Provider) error {
-	// Fetch all tokens (paginate)
+func fetchAllUpstreamTokens(client *UpstreamClient) ([]UpstreamToken, error) {
 	var allTokens []UpstreamToken
 	seenTokenIDs := make(map[int]struct{})
 	page := 0
@@ -130,7 +152,7 @@ func syncTokens(client *UpstreamClient, provider *model.Provider) error {
 	for {
 		tokenPage, err := client.GetTokens(page, pageSize)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		tokens := tokenPage.Items
 		for _, t := range tokens {
@@ -152,93 +174,242 @@ func syncTokens(client *UpstreamClient, provider *model.Provider) error {
 		}
 		page++
 	}
+	return allTokens, nil
+}
 
-	// Upsert each token
-	var upstreamIds []int
-	for _, t := range allTokens {
-		upstreamIds = append(upstreamIds, t.Id)
+func buildProviderTokenSnapshot(provider *model.Provider, upstreamToken UpstreamToken) *model.ProviderToken {
+	return &model.ProviderToken{
+		ProviderId:      provider.Id,
+		UpstreamTokenId: upstreamToken.Id,
+		Name:            upstreamToken.Name,
+		GroupName:       upstreamToken.Group,
+		Status:          upstreamToken.Status,
+		Priority:        provider.Priority,
+		Weight:          provider.Weight,
+		RemainQuota:     upstreamToken.RemainQuota,
+		UnlimitedQuota:  upstreamToken.UnlimitedQuota,
+		UsedQuota:       upstreamToken.UsedQuota,
+		ModelLimits:     upstreamToken.ModelLimits,
+		LastSynced:      time.Now().Unix(),
+	}
+}
 
-		// Resolve the real sk_key.
-		// Upstream variants:
-		//   a) Full key returned (ideal)
-		//   b) Key masked with ** (some forks)
-		//   c) Key emptied by Clean() (some forks set key="")
-		//   d) Key already prefixed with sk- (some forks)
-		rawKey := strings.TrimPrefix(t.Key, "sk-") // strip if upstream includes prefix
-		needsFetch := rawKey == "" || model.IsMaskedKey(rawKey)
+func unresolvedReasonForExisting(existing *model.ProviderToken) string {
+	if existing == nil {
+		return model.ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered
+	}
+	if strings.TrimSpace(existing.KeyUnresolvedReason) != "" {
+		return existing.KeyUnresolvedReason
+	}
+	if model.ClassifyProviderTokenKeyMaterial(existing.SkKey) == model.ProviderTokenKeyMaterialMasked {
+		return model.ProviderTokenKeyUnresolvedReasonLegacyContaminated
+	}
+	return model.ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered
+}
 
-		if needsFetch {
-			resolved := false
-			// Try GET /api/token/:id/key
-			fullKey, err := client.GetTokenKey(t.Id)
-			if err == nil && fullKey != "" && !model.IsMaskedKey(fullKey) {
-				rawKey = strings.TrimPrefix(fullKey, "sk-")
-				resolved = true
-			}
-			if !resolved {
-				// Try GET /api/token/:id (single token detail may return full key)
-				detailKey, err := client.GetTokenDetail(t.Id)
-				if err == nil && detailKey != "" && !model.IsMaskedKey(detailKey) {
-					rawKey = strings.TrimPrefix(detailKey, "sk-")
-					resolved = true
-				}
-			}
-			if !resolved {
-				// Fallback: preserve existing local key
-				existing, _ := model.GetProviderTokenByUpstream(provider.Id, t.Id)
-				if existing != nil && len(existing.SkKey) > 3 && !model.IsMaskedKey(existing.SkKey) {
-					rawKey = strings.TrimPrefix(existing.SkKey, "sk-")
-					resolved = true
-				}
-			}
-			if !resolved {
-				common.SysLog(fmt.Sprintf("[sync-token] WARNING: could not resolve full key for upstream token %d of provider %s (upstream_key=%q), skipping sk_key update", t.Id, provider.Name, t.Key))
-				// Skip this token's sk_key update — only update metadata
-				existing, _ := model.GetProviderTokenByUpstream(provider.Id, t.Id)
-				if existing != nil {
-					existing.Name = t.Name
-					existing.GroupName = t.Group
-					existing.Status = t.Status
-					existing.Priority = provider.Priority
-					existing.Weight = provider.Weight
-					existing.RemainQuota = t.RemainQuota
-					existing.UnlimitedQuota = t.UnlimitedQuota
-					existing.UsedQuota = t.UsedQuota
-					existing.ModelLimits = t.ModelLimits
-					existing.LastSynced = time.Now().Unix()
-					_ = existing.Update()
-				}
-				continue
-			}
+func reconcileProviderToken(client *UpstreamClient, provider *model.Provider, upstreamToken UpstreamToken) (*ProviderTokenReconcileResult, error) {
+	existing, err := model.GetProviderTokenByUpstream(provider.Id, upstreamToken.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	localToken := buildProviderTokenSnapshot(provider, upstreamToken)
+	result := &ProviderTokenReconcileResult{
+		UpstreamToken: upstreamToken,
+		ProviderToken: localToken,
+	}
+
+	if model.IsUsableProviderTokenKey(upstreamToken.Key) {
+		localToken.MarkKeyReady(upstreamToken.Key)
+		result.RecoveredFrom = "list"
+		return result, nil
+	}
+
+	detailToken, detailErr := client.GetTokenDetail(upstreamToken.Id)
+	if detailErr == nil && detailToken != nil && model.IsUsableProviderTokenKey(detailToken.Key) {
+		localToken.MarkKeyReady(detailToken.Key)
+		result.RecoveredFrom = "detail"
+		return result, nil
+	}
+
+	if localToken.PreserveReadyKeyFrom(existing) {
+		result.ExistingLocalKeyPreserved = true
+		result.RecoveredFrom = "local_preserved"
+		return result, nil
+	}
+
+	localToken.MarkKeyUnresolved(unresolvedReasonForExisting(existing))
+	result.RecoveredFrom = "unresolved"
+	return result, nil
+}
+
+func reconcileProviderTokens(client *UpstreamClient, provider *model.Provider, allTokens []UpstreamToken) (*ProviderTokenSyncSummary, error) {
+	summary := &ProviderTokenSyncSummary{
+		ResultsByUpstreamID: make(map[int]*ProviderTokenReconcileResult, len(allTokens)),
+	}
+	upstreamIds := make([]int, 0, len(allTokens))
+
+	for _, upstreamToken := range allTokens {
+		upstreamIds = append(upstreamIds, upstreamToken.Id)
+		reconcileResult, err := reconcileProviderToken(client, provider, upstreamToken)
+		if err != nil {
+			return nil, err
 		}
-
-		skKey := "sk-" + rawKey
-		pt := &model.ProviderToken{
-			ProviderId:      provider.Id,
-			UpstreamTokenId: t.Id,
-			SkKey:           skKey,
-			Name:            t.Name,
-			GroupName:       t.Group,
-			Status:          t.Status,
-			Priority:        provider.Priority,
-			Weight:          provider.Weight,
-			RemainQuota:     t.RemainQuota,
-			UnlimitedQuota:  t.UnlimitedQuota,
-			UsedQuota:       t.UsedQuota,
-			ModelLimits:     t.ModelLimits,
-			LastSynced:      time.Now().Unix(),
+		if err := model.UpsertProviderToken(reconcileResult.ProviderToken); err != nil {
+			return nil, err
 		}
-		if err := model.UpsertProviderToken(pt); err != nil {
-			common.SysLog(fmt.Sprintf("upsert token failed for upstream token %d: %v", t.Id, err))
+		summary.ResultsByUpstreamID[upstreamToken.Id] = reconcileResult
+		summary.Total++
+		if reconcileResult.ProviderToken.IsKeyReady() {
+			summary.ReadyCount++
+		} else {
+			summary.UnresolvedCount++
 		}
 	}
 
-	// Delete tokens that no longer exist upstream
 	if err := model.DeleteProviderTokensNotInIds(provider.Id, upstreamIds); err != nil {
 		common.SysLog(fmt.Sprintf("cleanup old tokens failed for provider %s: %v", provider.Name, err))
 	}
 
-	common.SysLog(fmt.Sprintf("synced %d tokens for provider %s", len(allTokens), provider.Name))
+	return summary, nil
+}
+
+func SyncProviderTokensOnly(provider *model.Provider) (*ProviderTokenSyncSummary, error) {
+	client, err := newUpstreamClientForProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	allTokens, err := fetchAllUpstreamTokens(client)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := reconcileProviderTokens(client, provider, allTokens)
+	if err != nil {
+		return nil, err
+	}
+	if err := rebuildProviderRoutesForProvider(provider.Id); err != nil {
+		common.SysLog(fmt.Sprintf("rebuild routes failed for provider %s after token-only sync: %v", provider.Name, err))
+	}
+	return summary, nil
+}
+
+func identifyCreatedUpstreamTokenID(beforeTokens []UpstreamToken, summary *ProviderTokenSyncSummary, reqName string, reqGroup string, reqUnlimitedQuota bool, reqRemainQuota int64, reqModelLimits string, createdResult *UpstreamTokenCreateResult) int {
+	if summary == nil {
+		return 0
+	}
+	beforeSet := make(map[int]struct{}, len(beforeTokens))
+	for _, token := range beforeTokens {
+		beforeSet[token.Id] = struct{}{}
+	}
+	candidates := make([]int, 0)
+	for upstreamID, result := range summary.ResultsByUpstreamID {
+		if _, existed := beforeSet[upstreamID]; existed {
+			continue
+		}
+		candidates = append(candidates, upstreamID)
+		_ = result
+	}
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	if len(candidates) > 1 {
+		trimmedName := strings.TrimSpace(reqName)
+		trimmedGroup := strings.TrimSpace(reqGroup)
+		trimmedModelLimits := strings.TrimSpace(reqModelLimits)
+		filtered := make([]int, 0, len(candidates))
+		for _, candidateID := range candidates {
+			result := summary.ResultsByUpstreamID[candidateID]
+			if result == nil {
+				continue
+			}
+			upstream := result.UpstreamToken
+			if trimmedName != "" && strings.TrimSpace(upstream.Name) != trimmedName {
+				continue
+			}
+			if trimmedGroup != "" && strings.TrimSpace(upstream.Group) != trimmedGroup {
+				continue
+			}
+			if upstream.UnlimitedQuota != reqUnlimitedQuota {
+				continue
+			}
+			if !reqUnlimitedQuota && upstream.RemainQuota != reqRemainQuota {
+				continue
+			}
+			if strings.TrimSpace(upstream.ModelLimits) != trimmedModelLimits {
+				continue
+			}
+			filtered = append(filtered, candidateID)
+		}
+		if len(filtered) == 1 {
+			return filtered[0]
+		}
+	}
+	if createdResult != nil && createdResult.Token != nil && createdResult.Token.Id > 0 {
+		if _, ok := summary.ResultsByUpstreamID[createdResult.Token.Id]; ok {
+			return createdResult.Token.Id
+		}
+	}
+	return 0
+}
+
+func CreateProviderTokenWithReconciliation(provider *model.Provider, name string, group string, unlimitedQuota bool, remainQuota int64, modelLimits string) (*ProviderTokenCreateOutcome, error) {
+	client, err := newUpstreamClientForProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	beforeTokens, err := fetchAllUpstreamTokens(client)
+	if err != nil {
+		return nil, err
+	}
+	createdResult, err := client.CreateUpstreamToken(name, group, unlimitedQuota, remainQuota, modelLimits)
+	if err != nil {
+		return nil, err
+	}
+	summary, err := SyncProviderTokensOnly(provider)
+	if err != nil {
+		return nil, err
+	}
+	outcome := &ProviderTokenCreateOutcome{UpstreamCreated: true}
+	identifiedUpstreamTokenID := identifyCreatedUpstreamTokenID(beforeTokens, summary, name, group, unlimitedQuota, remainQuota, modelLimits, createdResult)
+	if identifiedUpstreamTokenID == 0 {
+		outcome.KeyStatus = model.ProviderTokenKeyStatusUnresolved
+		outcome.KeyUnresolvedReason = model.ProviderTokenKeyUnresolvedReasonCreatedNotIdentified
+		return outcome, nil
+	}
+	outcome.CreatedTokenIdentified = true
+	outcome.UpstreamTokenId = identifiedUpstreamTokenID
+	if result := summary.ResultsByUpstreamID[identifiedUpstreamTokenID]; result != nil && result.ProviderToken != nil {
+		outcome.ProviderTokenId = result.ProviderToken.Id
+		outcome.KeyStatus = result.ProviderToken.KeyStatus
+		outcome.KeyUnresolvedReason = result.ProviderToken.KeyUnresolvedReason
+		if result.ProviderToken.IsKeyReady() {
+			outcome.KeyStatus = model.ProviderTokenKeyStatusReady
+			outcome.KeyUnresolvedReason = ""
+		}
+	}
+	if strings.TrimSpace(outcome.KeyStatus) == "" {
+		outcome.KeyStatus = model.ProviderTokenKeyStatusUnresolved
+	}
+	if outcome.KeyStatus == model.ProviderTokenKeyStatusUnresolved && strings.TrimSpace(outcome.KeyUnresolvedReason) == "" {
+		outcome.KeyUnresolvedReason = model.ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered
+	}
+	return outcome, nil
+}
+
+func syncTokens(client *UpstreamClient, provider *model.Provider) error {
+	allTokens, err := fetchAllUpstreamTokens(client)
+	if err != nil {
+		return err
+	}
+	summary, err := reconcileProviderTokens(client, provider, allTokens)
+	if err != nil {
+		return err
+	}
+	if summary.UnresolvedCount > 0 {
+		common.SysLog(fmt.Sprintf("synced %d tokens for provider %s (%d ready, %d unresolved)", summary.Total, provider.Name, summary.ReadyCount, summary.UnresolvedCount))
+		return nil
+	}
+	common.SysLog(fmt.Sprintf("synced %d tokens for provider %s", summary.Total, provider.Name))
 	return nil
 }
 

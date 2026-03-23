@@ -43,7 +43,7 @@
 ### provider_tokens
 
 - `sk_key`：上游真实鉴权 key（敏感字段）。
-  - 同步策略：上游 `GET /api/token/` 返回脱敏 key 时，系统调用 `GET /api/token/:id/key` 获取完整明文；若失败则保留本地已有值，防止被 `****` 覆盖。
+  - 同步策略：优先使用上游 `GET /api/token/` 列表明文；若列表为脱敏/空值，则调用 `GET /api/token/:id` 详情恢复明文；若仍失败则保留本地已有可用值，否则标记为 `key_status=unresolved`。
   - 前端更新接口不允许修改 `sk_key`，仅支持修改 name/group/priority/weight 等元数据。
 - `group_name`：用于匹配 `model_pricings.enable_groups`。
 - `model_limits`：可选模型限制（逗号分隔）。

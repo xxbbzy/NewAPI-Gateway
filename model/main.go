@@ -134,6 +134,10 @@ func InitDB() (err error) {
 		if err != nil {
 			return err
 		}
+		err = BackfillProviderTokenKeyState()
+		if err != nil {
+			return err
+		}
 		err = db.AutoMigrate(&AggregatedToken{})
 		if err != nil {
 			return err

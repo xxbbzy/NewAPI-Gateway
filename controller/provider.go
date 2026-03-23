@@ -17,14 +17,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var syncProviderAfterTokenCreate = func(provider *model.Provider) {
-	go func() {
-		if err := service.SyncProvider(provider); err != nil {
-			common.SysLog("sync after create token failed: " + err.Error())
-		}
-	}()
-}
-
 func GetProviders(c *gin.Context) {
 	pagination := parsePaginationParams(c)
 	keyword := strings.TrimSpace(c.Query("keyword"))
@@ -449,7 +441,7 @@ func SyncProviderHandler(c *gin.Context) {
 			common.SysLog("sync provider failed: " + err.Error())
 		}
 	}()
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "同步任务已启动"})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "同步任务已启动，请稍后在令牌列表查看 key_status 恢复结果"})
 }
 
 func CheckinProviderHandler(c *gin.Context) {
@@ -676,6 +668,13 @@ func GetProviderPricing(c *gin.Context) {
 	})
 }
 
+func buildProviderTokenCreateMessage(outcome *service.ProviderTokenCreateOutcome) string {
+	if outcome == nil || outcome.KeyStatus != model.ProviderTokenKeyStatusReady {
+		return "Token 已在上游创建，但明文密钥暂未恢复，请稍后同步后重试"
+	}
+	return "Token 已在上游创建，密钥已同步，可在列表中复制"
+}
+
 func CreateProviderToken(c *gin.Context) {
 	providerId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -716,45 +715,13 @@ func CreateProviderToken(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "分组不属于该渠道可用分组，请先同步后重试"})
 		return
 	}
-	// Call upstream to create token (upstream generates SK key)
-	client := service.NewUpstreamClient(provider.BaseURL, provider.AccessToken, provider.UserID)
-	created, err := client.CreateUpstreamToken(req.Name, req.GroupName, req.UnlimitedQuota, req.RemainQuota, req.ModelLimits)
+	outcome, err := service.CreateProviderTokenWithReconciliation(provider, req.Name, req.GroupName, req.UnlimitedQuota, req.RemainQuota, req.ModelLimits)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "上游创建 Token 失败: " + err.Error()})
 		return
 	}
-	// Try to store the token with the full key from the create response.
-	// Some upstream forks include the key in the response data, some don't.
-	createdKey := ""
-	if created != nil && created.Key != "" && !model.IsMaskedKey(created.Key) {
-		createdKey = strings.TrimPrefix(created.Key, "sk-")
-	}
-	if createdKey != "" && created.Id > 0 {
-		pt := &model.ProviderToken{
-			ProviderId:      providerId,
-			UpstreamTokenId: created.Id,
-			SkKey:           "sk-" + createdKey,
-			Name:            created.Name,
-			GroupName:       created.Group,
-			Status:          created.Status,
-			Priority:        provider.Priority,
-			Weight:          provider.Weight,
-			RemainQuota:     created.RemainQuota,
-			UnlimitedQuota:  created.UnlimitedQuota,
-			UsedQuota:       created.UsedQuota,
-			ModelLimits:     created.ModelLimits,
-		}
-		if insertErr := model.UpsertProviderToken(pt); insertErr != nil {
-			common.SysLog("failed to store created token locally: " + insertErr.Error())
-		}
-	}
-	// Run sync synchronously — this will pick up the newly created token
-	// and use GetTokenDetail to fetch the full key if not captured above.
-	if syncErr := service.SyncProvider(provider); syncErr != nil {
-		common.SysLog("sync after create token failed: " + syncErr.Error())
-	}
 	service.MarkBackupDirty(fmt.Sprintf("provider_token_create_upstream:%d", providerId))
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Token 已在上游创建并同步完成"})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": buildProviderTokenCreateMessage(outcome), "data": outcome})
 }
 
 func UpdateProviderToken(c *gin.Context) {
