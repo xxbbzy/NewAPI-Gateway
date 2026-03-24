@@ -4,6 +4,7 @@ import (
 	"NewAPI-Gateway/model"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -100,6 +101,39 @@ type UpstreamTokenPage struct {
 type UpstreamTokenCreateResult struct {
 	Message string
 	Token   *UpstreamToken
+}
+
+type UpstreamTokenPlaintextKeyErrorKind string
+
+const (
+	UpstreamTokenPlaintextKeyErrorNoKey         UpstreamTokenPlaintextKeyErrorKind = "no_key"
+	UpstreamTokenPlaintextKeyErrorUnauthorized  UpstreamTokenPlaintextKeyErrorKind = "unauthorized"
+	UpstreamTokenPlaintextKeyErrorUnavailable   UpstreamTokenPlaintextKeyErrorKind = "unavailable"
+	UpstreamTokenPlaintextKeyErrorRequestFailed UpstreamTokenPlaintextKeyErrorKind = "request_failed"
+)
+
+type UpstreamTokenPlaintextKeyError struct {
+	Kind       UpstreamTokenPlaintextKeyErrorKind
+	StatusCode int
+	Message    string
+	Cause      error
+}
+
+func (e *UpstreamTokenPlaintextKeyError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	return string(e.Kind)
+}
+
+func (e *UpstreamTokenPlaintextKeyError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 // UpstreamUserSelf mirrors partial user/self response
@@ -288,6 +322,91 @@ func (c *UpstreamClient) GetTokenDetail(tokenId int) (*UpstreamToken, error) {
 		return nil, fmt.Errorf("upstream get token detail failed: %s", resp.Message)
 	}
 	return &resp.Data, nil
+}
+
+func classifyPlaintextKeyFetchError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var upstreamErr *UpstreamRequestError
+	if errors.As(err, &upstreamErr) {
+		switch upstreamErr.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return &UpstreamTokenPlaintextKeyError{
+				Kind:       UpstreamTokenPlaintextKeyErrorUnauthorized,
+				StatusCode: upstreamErr.StatusCode,
+				Message:    upstreamErr.Error(),
+				Cause:      err,
+			}
+		case http.StatusNotFound, http.StatusMethodNotAllowed:
+			return &UpstreamTokenPlaintextKeyError{
+				Kind:       UpstreamTokenPlaintextKeyErrorUnavailable,
+				StatusCode: upstreamErr.StatusCode,
+				Message:    upstreamErr.Error(),
+				Cause:      err,
+			}
+		default:
+			return &UpstreamTokenPlaintextKeyError{
+				Kind:       UpstreamTokenPlaintextKeyErrorRequestFailed,
+				StatusCode: upstreamErr.StatusCode,
+				Message:    upstreamErr.Error(),
+				Cause:      err,
+			}
+		}
+	}
+	return &UpstreamTokenPlaintextKeyError{
+		Kind:    UpstreamTokenPlaintextKeyErrorRequestFailed,
+		Message: err.Error(),
+		Cause:   err,
+	}
+}
+
+func extractUpstreamTokenPlaintextKey(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var direct struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(raw, &direct); err == nil {
+		return strings.TrimSpace(direct.Key)
+	}
+	var object map[string]interface{}
+	if err := json.Unmarshal(raw, &object); err == nil {
+		if key, ok := object["key"].(string); ok {
+			return strings.TrimSpace(key)
+		}
+	}
+	var plain string
+	if err := json.Unmarshal(raw, &plain); err == nil {
+		return strings.TrimSpace(plain)
+	}
+	return ""
+}
+
+// GetTokenPlaintextKey fetches a token plaintext key via POST /api/token/:id/key.
+func (c *UpstreamClient) GetTokenPlaintextKey(tokenId int) (string, error) {
+	path := fmt.Sprintf("/api/token/%d/key", tokenId)
+	body, err := c.doRequest("POST", path)
+	if err != nil {
+		return "", classifyPlaintextKeyFetchError(err)
+	}
+	var resp UpstreamResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", &UpstreamTokenPlaintextKeyError{
+			Kind:    UpstreamTokenPlaintextKeyErrorRequestFailed,
+			Message: "failed to parse token key response",
+			Cause:   err,
+		}
+	}
+	key := extractUpstreamTokenPlaintextKey(resp.Data)
+	if !resp.Success || !model.IsUsableProviderTokenKey(key) {
+		return "", &UpstreamTokenPlaintextKeyError{
+			Kind:    UpstreamTokenPlaintextKeyErrorNoKey,
+			Message: strings.TrimSpace(resp.Message),
+		}
+	}
+	return key, nil
 }
 
 // CreateUpstreamToken calls upstream POST /api/token/ to create a new token.

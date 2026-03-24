@@ -12,9 +12,12 @@ const (
 	ProviderTokenKeyStatusReady      = "ready"
 	ProviderTokenKeyStatusUnresolved = "unresolved"
 
-	ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered = "plaintext_not_recovered"
-	ProviderTokenKeyUnresolvedReasonLegacyContaminated    = "legacy_contaminated"
-	ProviderTokenKeyUnresolvedReasonCreatedNotIdentified  = "created_token_not_identified"
+	ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered    = "plaintext_not_recovered"
+	ProviderTokenKeyUnresolvedReasonLegacyContaminated       = "legacy_contaminated"
+	ProviderTokenKeyUnresolvedReasonCreatedNotIdentified     = "created_token_not_identified"
+	ProviderTokenKeyUnresolvedReasonKeyEndpointUnavailable   = "key_endpoint_unavailable"
+	ProviderTokenKeyUnresolvedReasonKeyEndpointUnauthorized  = "key_endpoint_unauthorized"
+	ProviderTokenKeyUnresolvedReasonKeyEndpointRequestFailed = "key_endpoint_request_failed"
 
 	ProviderTokenKeyMaterialEmpty  ProviderTokenKeyMaterial = "empty"
 	ProviderTokenKeyMaterialMasked ProviderTokenKeyMaterial = "masked"

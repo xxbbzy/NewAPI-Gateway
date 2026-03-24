@@ -57,6 +57,14 @@
 ### Access Token 可否复用已有业务令牌？
 建议使用专门用于网关对接的令牌，便于最小权限控制与后续轮换。
 
+### 为什么令牌长期显示“明文密钥待恢复”？
+NewAPI-Gateway 在对接 `new-api` 时，会优先调用 `POST /api/token/{id}/key` 获取明文密钥；若接口未开放或鉴权失败，令牌会保持 `unresolved`。
+
+排查建议：
+- 确认上游版本支持 `POST /api/token/{id}/key`；
+- 确认网关中填写的 `Access Token` 与 `Upstream User ID` 对应同一上游用户（即 `Authorization + New-Api-User` 必须匹配）；
+- 检查网关到上游的网络连通性与代理配置。
+
 ## 相关文档
 
 - [添加供应商填写示例](./provider-form-example.md)

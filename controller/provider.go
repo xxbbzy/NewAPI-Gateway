@@ -669,10 +669,22 @@ func GetProviderPricing(c *gin.Context) {
 }
 
 func buildProviderTokenCreateMessage(outcome *service.ProviderTokenCreateOutcome) string {
-	if outcome == nil || outcome.KeyStatus != model.ProviderTokenKeyStatusReady {
+	if outcome == nil {
 		return "Token 已在上游创建，但明文密钥暂未恢复，请稍后同步后重试"
 	}
-	return "Token 已在上游创建，密钥已同步，可在列表中复制"
+	if outcome.KeyStatus == model.ProviderTokenKeyStatusReady {
+		return "Token 已在上游创建，密钥已同步，可在列表中复制"
+	}
+	switch strings.TrimSpace(outcome.KeyUnresolvedReason) {
+	case model.ProviderTokenKeyUnresolvedReasonKeyEndpointUnavailable:
+		return "Token 已在上游创建，但上游未开放明文恢复接口（POST /api/token/{id}/key）"
+	case model.ProviderTokenKeyUnresolvedReasonKeyEndpointUnauthorized:
+		return "Token 已在上游创建，但明文恢复鉴权失败，请检查 Authorization 与 New-Api-User 是否匹配"
+	case model.ProviderTokenKeyUnresolvedReasonKeyEndpointRequestFailed:
+		return "Token 已在上游创建，但明文恢复请求失败，请检查网络连通性后重试"
+	default:
+		return "Token 已在上游创建，但明文密钥暂未恢复，请稍后同步后重试"
+	}
 }
 
 func CreateProviderToken(c *gin.Context) {

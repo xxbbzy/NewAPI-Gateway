@@ -4,6 +4,7 @@ import (
 	"NewAPI-Gateway/common"
 	"NewAPI-Gateway/model"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,17 +17,17 @@ var syncBalanceStep = syncBalance
 var rebuildProviderRoutesForProvider = RebuildProviderRoutes
 
 type ProviderTokenReconcileResult struct {
-	UpstreamToken              UpstreamToken
-	ProviderToken              *model.ProviderToken
-	ExistingLocalKeyPreserved  bool
-	RecoveredFrom              string
+	UpstreamToken             UpstreamToken
+	ProviderToken             *model.ProviderToken
+	ExistingLocalKeyPreserved bool
+	RecoveredFrom             string
 }
 
 type ProviderTokenSyncSummary struct {
 	ResultsByUpstreamID map[int]*ProviderTokenReconcileResult
-	Total              int
-	ReadyCount         int
-	UnresolvedCount    int
+	Total               int
+	ReadyCount          int
+	UnresolvedCount     int
 }
 
 type ProviderTokenCreateOutcome struct {
@@ -207,6 +208,34 @@ func unresolvedReasonForExisting(existing *model.ProviderToken) string {
 	return model.ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered
 }
 
+func unresolvedReasonForPlaintextKeyFetchError(err error) string {
+	var keyErr *UpstreamTokenPlaintextKeyError
+	if !errors.As(err, &keyErr) {
+		return model.ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered
+	}
+	switch keyErr.Kind {
+	case UpstreamTokenPlaintextKeyErrorUnauthorized:
+		return model.ProviderTokenKeyUnresolvedReasonKeyEndpointUnauthorized
+	case UpstreamTokenPlaintextKeyErrorUnavailable:
+		return model.ProviderTokenKeyUnresolvedReasonKeyEndpointUnavailable
+	case UpstreamTokenPlaintextKeyErrorRequestFailed:
+		return model.ProviderTokenKeyUnresolvedReasonKeyEndpointRequestFailed
+	default:
+		return model.ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered
+	}
+}
+
+func plaintextKeyFetchErrorLabel(err error) string {
+	var keyErr *UpstreamTokenPlaintextKeyError
+	if !errors.As(err, &keyErr) {
+		return "unknown"
+	}
+	if keyErr.StatusCode > 0 {
+		return fmt.Sprintf("%s(status=%d)", keyErr.Kind, keyErr.StatusCode)
+	}
+	return string(keyErr.Kind)
+}
+
 func reconcileProviderToken(client *UpstreamClient, provider *model.Provider, upstreamToken UpstreamToken) (*ProviderTokenReconcileResult, error) {
 	existing, err := model.GetProviderTokenByUpstream(provider.Id, upstreamToken.Id)
 	if err != nil {
@@ -225,11 +254,37 @@ func reconcileProviderToken(client *UpstreamClient, provider *model.Provider, up
 		return result, nil
 	}
 
+	unresolvedReason := model.ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered
+	plaintextKey, keyErr := client.GetTokenPlaintextKey(upstreamToken.Id)
+	if keyErr == nil && model.IsUsableProviderTokenKey(plaintextKey) {
+		localToken.MarkKeyReady(plaintextKey)
+		result.RecoveredFrom = "key_endpoint"
+		return result, nil
+	}
+	if keyErr != nil {
+		unresolvedReason = unresolvedReasonForPlaintextKeyFetchError(keyErr)
+		common.SysLog(fmt.Sprintf(
+			"provider %s token %d plaintext recovery via /key failed: reason=%s, category=%s",
+			providerRequestLabel(provider),
+			upstreamToken.Id,
+			unresolvedReason,
+			plaintextKeyFetchErrorLabel(keyErr),
+		))
+	}
+
 	detailToken, detailErr := client.GetTokenDetail(upstreamToken.Id)
 	if detailErr == nil && detailToken != nil && model.IsUsableProviderTokenKey(detailToken.Key) {
 		localToken.MarkKeyReady(detailToken.Key)
 		result.RecoveredFrom = "detail"
 		return result, nil
+	}
+	if detailErr != nil {
+		common.SysLog(fmt.Sprintf(
+			"provider %s token %d detail fallback failed after /key attempt: %v",
+			providerRequestLabel(provider),
+			upstreamToken.Id,
+			detailErr,
+		))
 	}
 
 	if localToken.PreserveReadyKeyFrom(existing) {
@@ -238,7 +293,10 @@ func reconcileProviderToken(client *UpstreamClient, provider *model.Provider, up
 		return result, nil
 	}
 
-	localToken.MarkKeyUnresolved(unresolvedReasonForExisting(existing))
+	if unresolvedReason == model.ProviderTokenKeyUnresolvedReasonPlaintextNotRecovered {
+		unresolvedReason = unresolvedReasonForExisting(existing)
+	}
+	localToken.MarkKeyUnresolved(unresolvedReason)
 	result.RecoveredFrom = "unresolved"
 	return result, nil
 }

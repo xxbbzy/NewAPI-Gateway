@@ -356,3 +356,115 @@ func TestSyncTokensRepairsContaminatedRowWhenDetailReturnsPlaintext(t *testing.T
 		t.Fatalf("expected unresolved reason cleared after repair, got %q", token.KeyUnresolvedReason)
 	}
 }
+
+func TestSyncTokensRecoversPlaintextFromKeyEndpoint(t *testing.T) {
+	originDB := model.DB
+	model.DB = prepareSyncTokenPaginationTestDB(t)
+	defer func() { model.DB = originDB }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/token/" && r.Method == http.MethodGet:
+			payload := map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"page": 0, "page_size": 100, "total": 1,
+					"items": []map[string]interface{}{
+						{"id": 11, "key": "MASKED********", "name": "t-key", "status": 1, "group": "g1"},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(payload)
+		case r.URL.Path == "/api/token/11/key" && r.Method == http.MethodPost:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"key": "PLAINTEXTKEY",
+				},
+			})
+		case r.URL.Path == "/api/token/11" && r.Method == http.MethodGet:
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewUpstreamClient(server.URL, "token", 1)
+	provider := &model.Provider{Id: 1, Name: "p-key", Priority: 0, Weight: 10}
+	if err := syncTokens(client, provider); err != nil {
+		t.Fatalf("syncTokens failed: %v", err)
+	}
+
+	var token model.ProviderToken
+	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", 1, 11).First(&token).Error; err != nil {
+		t.Fatalf("query token failed: %v", err)
+	}
+	if token.SkKey != "sk-PLAINTEXTKEY" {
+		t.Fatalf("expected plaintext key from /key endpoint, got %q", token.SkKey)
+	}
+	if token.KeyStatus != model.ProviderTokenKeyStatusReady {
+		t.Fatalf("expected ready key_status, got %q", token.KeyStatus)
+	}
+}
+
+func TestSyncTokensFallsBackToDetailWhenKeyEndpointUnavailable(t *testing.T) {
+	originDB := model.DB
+	model.DB = prepareSyncTokenPaginationTestDB(t)
+	defer func() { model.DB = originDB }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/token/" && r.Method == http.MethodGet:
+			payload := map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"page": 0, "page_size": 100, "total": 1,
+					"items": []map[string]interface{}{
+						{"id": 12, "key": "MASKED********", "name": "t-detail", "status": 1, "group": "g1"},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(payload)
+		case r.URL.Path == "/api/token/12/key" && r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "not found",
+			})
+		case r.URL.Path == "/api/token/12" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "",
+				"data": map[string]interface{}{
+					"id": 12, "key": "DETAILKEY", "name": "t-detail", "status": 1, "group": "g1",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewUpstreamClient(server.URL, "token", 1)
+	provider := &model.Provider{Id: 1, Name: "p-detail", Priority: 0, Weight: 10}
+	if err := syncTokens(client, provider); err != nil {
+		t.Fatalf("syncTokens failed: %v", err)
+	}
+
+	var token model.ProviderToken
+	if err := model.DB.Where("provider_id = ? AND upstream_token_id = ?", 1, 12).First(&token).Error; err != nil {
+		t.Fatalf("query token failed: %v", err)
+	}
+	if token.SkKey != "sk-DETAILKEY" {
+		t.Fatalf("expected plaintext key from detail fallback, got %q", token.SkKey)
+	}
+	if token.KeyStatus != model.ProviderTokenKeyStatusReady {
+		t.Fatalf("expected ready key_status, got %q", token.KeyStatus)
+	}
+}

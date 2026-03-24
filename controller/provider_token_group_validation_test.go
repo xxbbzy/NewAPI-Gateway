@@ -2,6 +2,7 @@ package controller
 
 import (
 	"NewAPI-Gateway/model"
+	"NewAPI-Gateway/service"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -262,5 +263,115 @@ func TestCreateProviderTokenAcceptsValidGroup(t *testing.T) {
 	}
 	if stored.UpstreamTokenId != 101 || stored.SkKey != "sk-abcdefghijklmnop" {
 		t.Fatalf("unexpected stored token state: %+v", stored)
+	}
+}
+
+func TestCreateProviderTokenRecoversPlaintextViaKeyEndpoint(t *testing.T) {
+	originDB := model.DB
+	model.DB = prepareProviderTokenValidationTestDB(t)
+	defer func() { model.DB = originDB }()
+
+	gin.SetMode(gin.TestMode)
+	created := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			created = true
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			page := r.URL.Query().Get("p")
+			if page == "" {
+				page = "0"
+			}
+			if !created || page != "0" {
+				_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"page":1,"page_size":100,"total":0,"items":[]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"page":0,"page_size":100,"total":1,"items":[{"id":102,"key":"abc********xyz","name":"demo","status":1,"group":"default","remain_quota":0,"unlimited_quota":true,"used_quota":0,"model_limits_enabled":false,"model_limits":""}]}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/102/key":
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"key":"restored-plaintext"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	provider := newProviderWithPricing(t, upstream.URL)
+
+	validBody := []byte(`{"name":"demo","group_name":"default","unlimited_quota":true}`)
+	ctxValid, recorderValid := makeProviderRequestContext(http.MethodPost, "/api/provider/"+strconv.Itoa(provider.Id)+"/tokens", validBody, provider.Id)
+	CreateProviderToken(ctxValid)
+
+	var validResp struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+		Data    struct {
+			UpstreamCreated        bool   `json:"upstream_created"`
+			CreatedTokenIdentified bool   `json:"created_token_identified"`
+			ProviderTokenId        int    `json:"provider_token_id"`
+			UpstreamTokenId        int    `json:"upstream_token_id"`
+			KeyStatus              string `json:"key_status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorderValid.Body.Bytes(), &validResp); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+	if !validResp.Success {
+		t.Fatalf("expected success, got message: %s", validResp.Message)
+	}
+	if validResp.Data.KeyStatus != model.ProviderTokenKeyStatusReady {
+		t.Fatalf("expected ready key status, got %+v", validResp.Data)
+	}
+	if !strings.Contains(validResp.Message, "密钥已同步") {
+		t.Fatalf("unexpected success message: %s", validResp.Message)
+	}
+
+	stored, err := model.GetProviderTokenById(validResp.Data.ProviderTokenId)
+	if err != nil {
+		t.Fatalf("load created provider token failed: %v", err)
+	}
+	if stored.UpstreamTokenId != 102 || stored.SkKey != "sk-restored-plaintext" {
+		t.Fatalf("unexpected stored token state: %+v", stored)
+	}
+}
+
+func TestBuildProviderTokenCreateMessageReasonSpecific(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome *service.ProviderTokenCreateOutcome
+		want    string
+	}{
+		{
+			name: "key endpoint unavailable",
+			outcome: &service.ProviderTokenCreateOutcome{
+				KeyStatus:           model.ProviderTokenKeyStatusUnresolved,
+				KeyUnresolvedReason: model.ProviderTokenKeyUnresolvedReasonKeyEndpointUnavailable,
+			},
+			want: "未开放明文恢复接口",
+		},
+		{
+			name: "key endpoint unauthorized",
+			outcome: &service.ProviderTokenCreateOutcome{
+				KeyStatus:           model.ProviderTokenKeyStatusUnresolved,
+				KeyUnresolvedReason: model.ProviderTokenKeyUnresolvedReasonKeyEndpointUnauthorized,
+			},
+			want: "鉴权失败",
+		},
+		{
+			name: "key endpoint request failed",
+			outcome: &service.ProviderTokenCreateOutcome{
+				KeyStatus:           model.ProviderTokenKeyStatusUnresolved,
+				KeyUnresolvedReason: model.ProviderTokenKeyUnresolvedReasonKeyEndpointRequestFailed,
+			},
+			want: "请求失败",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := buildProviderTokenCreateMessage(tt.outcome)
+			if !strings.Contains(msg, tt.want) {
+				t.Fatalf("unexpected message: %s", msg)
+			}
+		})
 	}
 }
