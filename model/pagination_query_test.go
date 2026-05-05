@@ -28,7 +28,7 @@ func TestQueryProvidersSupportsEmptyAndOutOfRange(t *testing.T) {
 	DB = preparePaginationQueryTestDB(t)
 	defer func() { DB = originDB }()
 
-	items, total, err := QueryProviders("", 0, 10)
+	items, total, err := QueryProviders("", ProviderRouteFilterAll, 0, 10)
 	if err != nil {
 		t.Fatalf("unexpected error for empty query: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestQueryProvidersSupportsEmptyAndOutOfRange(t *testing.T) {
 		}
 	}
 
-	items, total, err = QueryProviders("", 100, 10)
+	items, total, err = QueryProviders("", ProviderRouteFilterAll, 100, 10)
 	if err != nil {
 		t.Fatalf("unexpected error for out-of-range query: %v", err)
 	}

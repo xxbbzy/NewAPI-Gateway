@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 const (
@@ -315,7 +317,7 @@ func BuildRouteAttemptsByPriority(modelName string) ([][]RouteAttempt, error) {
 			if !token.CanParticipateInRouting() {
 				continue
 			}
-			if !provider.CanParticipateInAutomatedUseAt(now) {
+			if !provider.IsRouteEligibleAt(now) {
 				continue
 			}
 			metric := metricLookup[route.Id]
@@ -895,6 +897,9 @@ func loadRecentUsageCostByTokenModel(tokenIds []int, modelNames []string, usageW
 		Where("created_at >= ? AND provider_token_id IN ? AND model_name IN ? AND status = 1", since, tokenIds, modelNames).
 		Group("provider_token_id, model_name").
 		Scan(&rows).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return usageLookup, nil
+		}
 		return nil, err
 	}
 	for _, row := range rows {
@@ -945,6 +950,9 @@ func loadRouteHealthStatsByTokenModel(tokenIds []int, modelNames []string, windo
 		Where("created_at >= ? AND provider_token_id IN ? AND model_name IN ?", since, tokenIds, modelNames).
 		Group("provider_token_id, model_name").
 		Scan(&rows).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return statsLookup, nil
+		}
 		return nil, err
 	}
 
@@ -1019,6 +1027,9 @@ func loadRouteInvalidResponseSuppressionByTokenModel(tokenIds []int, modelNames 
 		Where("created_at >= ? AND provider_token_id IN ? AND model_name IN ?", since, tokenIds, modelNames).
 		Group("provider_token_id, model_name").
 		Scan(&rows).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return suppressedUntilLookup, nil
+		}
 		return nil, err
 	}
 

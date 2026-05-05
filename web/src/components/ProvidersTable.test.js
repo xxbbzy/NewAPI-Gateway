@@ -168,6 +168,9 @@ describe('ProvidersTable', () => {
                   priority: 0,
                   health_status: 'unreachable',
                   health_blocked: true,
+                  route_eligible: false,
+                  route_block_reasons: ['site_unavailable', 'balance_stale'],
+                  balance_updated: 1730000001,
                 },
               ],
               p: 0,
@@ -197,6 +200,9 @@ describe('ProvidersTable', () => {
     expect(container.textContent).toContain('Provider-A');
     expect(container.textContent).toContain('不可用');
     expect(container.textContent).toContain('已启用');
+    expect(container.textContent).toContain('路由排除');
+    expect(container.textContent).toContain('站点不可用');
+    expect(container.textContent).toContain('余额过期/未更新');
   });
 
   it('triggers unchecked-only checkin run from overview action', async () => {
@@ -360,6 +366,79 @@ describe('ProvidersTable', () => {
     await flushPromises();
 
     expect(API.get).toHaveBeenCalledWith(expect.stringContaining('/api/provider/?p=0&page_size=10&keyword=beta'));
+  });
+
+  it('sends route filter in provider list requests and resets pagination', async () => {
+    API.get.mockImplementation((url) => {
+      if (url.startsWith('/api/provider/?p=0&page_size=10')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [
+                {
+                  id: 1,
+                  name: 'Provider-A',
+                  base_url: 'https://a.example.com',
+                  created_at: 1730000000,
+                  status: 1,
+                  checkin_enabled: false,
+                  weight: 10,
+                  priority: 0,
+                  route_eligible: true,
+                  route_block_reasons: [],
+                },
+              ],
+              p: 0,
+              page_size: 10,
+              total: 1,
+              total_pages: 1,
+              has_more: false,
+            },
+          },
+        });
+      }
+      if (url.includes('route_filter=balance_stale')) {
+        return Promise.resolve({
+          data: {
+            success: true,
+            message: '',
+            data: {
+              items: [],
+              p: 0,
+              page_size: 10,
+              total: 0,
+              total_pages: 0,
+              has_more: false,
+            },
+          },
+        });
+      }
+      if (url === '/api/provider/summary') {
+        return Promise.resolve({ data: { success: true, data: {} } });
+      }
+      if (url === '/api/provider/checkin/summary?limit=1' || url === '/api/provider/checkin/messages?limit=20' || url === '/api/provider/checkin/uncheckin') {
+        return Promise.resolve({ data: { success: true, data: [] } });
+      }
+      return Promise.resolve({ data: { success: true, data: [] } });
+    });
+
+    await act(async () => {
+      root.render(<ProvidersTable />);
+    });
+    await flushPromises();
+    await flushPromises();
+
+    const routeFilter = container.querySelector('select[name="route_filter"]');
+    expect(routeFilter).not.toBeNull();
+    await act(async () => {
+      setInputValue(routeFilter, 'balance_stale');
+    });
+    await flushPromises();
+    await flushPromises();
+
+    expect(API.get).toHaveBeenCalledWith(expect.stringContaining('/api/provider/?p=0&page_size=10&route_filter=balance_stale'));
   });
 
   it('submits provider proxy settings from the modal form', async () => {

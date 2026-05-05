@@ -4,9 +4,12 @@ import (
 	"NewAPI-Gateway/common"
 	"errors"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 const (
@@ -16,6 +19,16 @@ const (
 
 	providerHealthCooldownSeconds = 5 * 60
 	providerBalanceFreshHours     = 24
+	providerRouteBalanceFreshDays = 2
+
+	ProviderRouteFilterAll             = "all"
+	ProviderRouteFilterEligible        = "eligible"
+	ProviderRouteFilterAbnormal        = "abnormal"
+	ProviderRouteFilterSiteUnavailable = "site_unavailable"
+	ProviderRouteFilterBalanceStale    = "balance_stale"
+
+	ProviderRouteBlockReasonSiteUnavailable = "site_unavailable"
+	ProviderRouteBlockReasonBalanceStale    = "balance_stale"
 )
 
 type ProviderSummary struct {
@@ -57,6 +70,23 @@ func filterAutomatedUsableProviders(providers []*Provider) []*Provider {
 	return filtered
 }
 
+func normalizeProviderRouteFilter(filter string) string {
+	switch strings.ToLower(strings.TrimSpace(filter)) {
+	case "", ProviderRouteFilterAll:
+		return ProviderRouteFilterAll
+	case ProviderRouteFilterEligible:
+		return ProviderRouteFilterEligible
+	case ProviderRouteFilterAbnormal:
+		return ProviderRouteFilterAbnormal
+	case ProviderRouteFilterSiteUnavailable:
+		return ProviderRouteFilterSiteUnavailable
+	case ProviderRouteFilterBalanceStale:
+		return ProviderRouteFilterBalanceStale
+	default:
+		return ProviderRouteFilterAll
+	}
+}
+
 func (p *Provider) IsHealthBlockedAt(now time.Time) bool {
 	if p == nil {
 		return false
@@ -90,6 +120,140 @@ func (p *Provider) BalanceFreshnessAt(now time.Time) string {
 		return "fresh"
 	}
 	return "stale"
+}
+
+func providerRouteLocation() *time.Location {
+	common.OptionMapRWMutex.RLock()
+	timezone := strings.TrimSpace(common.OptionMap["CheckinScheduleTimezone"])
+	common.OptionMapRWMutex.RUnlock()
+	if timezone == "" {
+		timezone = common.CheckinScheduleTimezone
+	}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		common.SysLog("invalid provider route timezone: " + timezone + ", fallback to UTC")
+		return time.UTC
+	}
+	return loc
+}
+
+func providerRouteBalanceFreshThresholdAt(now time.Time) time.Time {
+	loc := providerRouteLocation()
+	localNow := now.In(loc)
+	return time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -(providerRouteBalanceFreshDays - 1))
+}
+
+func (p *Provider) IsRouteBalanceFreshAt(now time.Time) bool {
+	if p == nil || p.BalanceUpdated <= 0 {
+		return false
+	}
+	loc := providerRouteLocation()
+	threshold := providerRouteBalanceFreshThresholdAt(now)
+	updatedAt := time.Unix(p.BalanceUpdated, 0).In(loc)
+	return !updatedAt.Before(threshold)
+}
+
+func (p *Provider) RouteBlockReasonsAt(now time.Time) []string {
+	if p == nil {
+		return nil
+	}
+	reasons := make([]string, 0, 2)
+	if p.IsHealthBlockedAt(now) {
+		reasons = append(reasons, ProviderRouteBlockReasonSiteUnavailable)
+	}
+	if !p.IsRouteBalanceFreshAt(now) {
+		reasons = append(reasons, ProviderRouteBlockReasonBalanceStale)
+	}
+	sort.Strings(reasons)
+	return reasons
+}
+
+func (p *Provider) IsRouteEligibleAt(now time.Time) bool {
+	return p != nil && p.Status == common.UserStatusEnabled && len(p.RouteBlockReasonsAt(now)) == 0
+}
+
+func (p *Provider) applyRuntimeStateAt(now time.Time) {
+	if p == nil {
+		return
+	}
+	p.HealthBlocked = p.IsHealthBlockedAt(now)
+	p.BalanceFreshness = p.BalanceFreshnessAt(now)
+	p.RouteBlockReasons = p.RouteBlockReasonsAt(now)
+	p.RouteEligible = len(p.RouteBlockReasons) == 0
+}
+
+func filterProvidersByRouteState(providers []*Provider, routeFilter string, now time.Time) []*Provider {
+	normalizedFilter := normalizeProviderRouteFilter(routeFilter)
+	filtered := make([]*Provider, 0, len(providers))
+	for _, provider := range providers {
+		if provider == nil {
+			continue
+		}
+		provider.applyRuntimeStateAt(now)
+		switch normalizedFilter {
+		case ProviderRouteFilterEligible:
+			if !provider.RouteEligible {
+				continue
+			}
+		case ProviderRouteFilterAbnormal:
+			if provider.RouteEligible {
+				continue
+			}
+		case ProviderRouteFilterSiteUnavailable:
+			if !containsProviderRouteBlockReason(provider.RouteBlockReasons, ProviderRouteBlockReasonSiteUnavailable) {
+				continue
+			}
+		case ProviderRouteFilterBalanceStale:
+			if !containsProviderRouteBlockReason(provider.RouteBlockReasons, ProviderRouteBlockReasonBalanceStale) {
+				continue
+			}
+		}
+		filtered = append(filtered, provider)
+	}
+	return filtered
+}
+
+func containsProviderRouteBlockReason(reasons []string, target string) bool {
+	for _, reason := range reasons {
+		if reason == target {
+			return true
+		}
+	}
+	return false
+}
+
+func applyProviderRouteFilterQuery(db *gorm.DB, routeFilter string, now time.Time) *gorm.DB {
+	if db == nil {
+		return nil
+	}
+	switch normalizeProviderRouteFilter(routeFilter) {
+	case ProviderRouteFilterEligible:
+		return db.Where(
+			"status = ? AND NOT (health_status = ? AND (health_cooldown_until <= 0 OR health_cooldown_until > ?)) AND balance_updated >= ?",
+			common.UserStatusEnabled,
+			ProviderHealthStatusUnreachable,
+			now.Unix(),
+			providerRouteBalanceFreshThresholdAt(now).Unix(),
+		)
+	case ProviderRouteFilterAbnormal:
+		return db.Where(
+			"status != ? OR health_status = ? AND (health_cooldown_until <= 0 OR health_cooldown_until > ?) OR balance_updated < ?",
+			common.UserStatusEnabled,
+			ProviderHealthStatusUnreachable,
+			now.Unix(),
+			providerRouteBalanceFreshThresholdAt(now).Unix(),
+		)
+	case ProviderRouteFilterSiteUnavailable:
+		return db.Where(
+			"health_status = ? AND (health_cooldown_until <= 0 OR health_cooldown_until > ?)",
+			ProviderHealthStatusUnreachable,
+			now.Unix(),
+		)
+	case ProviderRouteFilterBalanceStale:
+		return db.Where("balance_updated < ?", providerRouteBalanceFreshThresholdAt(now).Unix())
+	default:
+		return db
+	}
 }
 
 func (p *Provider) MarkHealthFailure(reason string) error {

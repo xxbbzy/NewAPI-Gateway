@@ -20,7 +20,8 @@ import (
 func GetProviders(c *gin.Context) {
 	pagination := parsePaginationParams(c)
 	keyword := strings.TrimSpace(c.Query("keyword"))
-	providers, total, err := model.QueryProviders(keyword, pagination.Offset, pagination.PageSize)
+	routeFilter := strings.TrimSpace(c.DefaultQuery("route_filter", model.ProviderRouteFilterAll))
+	providers, total, err := model.QueryProviders(keyword, routeFilter, pagination.Offset, pagination.PageSize)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return

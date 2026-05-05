@@ -25,6 +25,13 @@ import Pagination from './ui/Pagination';
 const ACCESS_TOKEN_GUIDE_URL = 'https://github.com/xxbbzy/NewAPI-Gateway/blob/main/docs/provider-form-guide.md#access-token';
 const UPSTREAM_USER_ID_GUIDE_URL = 'https://github.com/xxbbzy/NewAPI-Gateway/blob/main/docs/provider-form-guide.md#upstream-user-id';
 const QUOTA_PER_USD = 500000;
+const ROUTE_FILTER_OPTIONS = [
+  { value: 'all', label: '全部路由状态' },
+  { value: 'eligible', label: '可参与路由' },
+  { value: 'abnormal', label: '异常站点' },
+  { value: 'site_unavailable', label: '站点不可用' },
+  { value: 'balance_stale', label: '余额过期/未更新' },
+];
 
 const ProvidersTable = () => {
   const navigate = useNavigate();
@@ -39,6 +46,7 @@ const ProvidersTable = () => {
   const [editProvider, setEditProvider] = useState(null);
   const [activePage, setActivePage] = useState(1);
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [routeFilter, setRouteFilter] = useState('all');
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
 
@@ -51,6 +59,9 @@ const ProvidersTable = () => {
       const keyword = searchKeyword.trim();
       if (keyword) {
         params.set('keyword', keyword);
+      }
+      if (routeFilter && routeFilter !== 'all') {
+        params.set('route_filter', routeFilter);
       }
       const res = await API.get(`/api/provider/?${params.toString()}`);
       const { success, data, message } = res.data;
@@ -69,7 +80,7 @@ const ProvidersTable = () => {
     } finally {
       setLoading(false);
     }
-  }, [searchKeyword]);
+  }, [routeFilter, searchKeyword]);
 
   const loadProviderSummary = useCallback(async () => {
     try {
@@ -363,6 +374,15 @@ const ProvidersTable = () => {
     return <Badge color="gray">未知</Badge>;
   };
 
+  const getRouteBlockReasons = (provider) => {
+    if (!Array.isArray(provider?.route_block_reasons)) {
+      return [];
+    }
+    return provider.route_block_reasons;
+  };
+
+  const hasRouteBlockReason = (provider, reason) => getRouteBlockReasons(provider).includes(reason);
+
   const onPaginationChange = async (e, { activePage: nextActivePage }) => {
     if (nextActivePage < 1) return;
     const effectiveTotalPages = Math.max(totalPages, 1);
@@ -520,6 +540,22 @@ const ProvidersTable = () => {
                 style={{ marginBottom: 0 }}
               />
             </div>
+            <select
+              className='filter-select'
+              name='route_filter'
+              aria-label='路由状态筛选'
+              value={routeFilter}
+              onChange={(e) => {
+                setRouteFilter(e.target.value);
+                setActivePage(1);
+              }}
+            >
+              {ROUTE_FILTER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <Button variant="outline" onClick={exportProviders} icon={Download}>导出</Button>
@@ -557,6 +593,9 @@ const ProvidersTable = () => {
                   <Td>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                       <div>{renderProviderHealth(p)}</div>
+                      {!p.route_eligible && <Badge color="red">路由排除</Badge>}
+                      {hasRouteBlockReason(p, 'site_unavailable') && <Badge color="red">站点不可用</Badge>}
+                      {hasRouteBlockReason(p, 'balance_stale') && <Badge color="orange">余额过期/未更新</Badge>}
                       {p.proxy_enabled && <Badge color="orange">代理</Badge>}
                       {p.health_failure_reason && (
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', maxWidth: '180px' }} title={p.health_failure_reason}>

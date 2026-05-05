@@ -30,6 +30,8 @@ func seedAliasRouteForPermissionTests(t *testing.T) {
 		BaseURL:           "https://permission.example.com",
 		AccessToken:       "permission-token",
 		Status:            1,
+		HealthStatus:      ProviderHealthStatusHealthy,
+		BalanceUpdated:    time.Now().Unix(),
 		ModelAliasMapping: `{"aaa":"bbbxxxcccddd"}`,
 	}
 	if err := provider.Insert(); err != nil {

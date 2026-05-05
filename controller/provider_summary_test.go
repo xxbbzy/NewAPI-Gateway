@@ -40,6 +40,7 @@ func TestGetProviderSummaryReturnsAggregatedData(t *testing.T) {
 		AccessToken:    "token",
 		Balance:        "$7.25",
 		BalanceUpdated: time.Now().Unix(),
+		HealthStatus:   model.ProviderHealthStatusHealthy,
 		Status:         1,
 	}
 	if err := provider.Insert(); err != nil {
@@ -78,6 +79,8 @@ func TestGetProviderDetailRedactsProxyFields(t *testing.T) {
 		AccessToken:  "secret-token",
 		ProxyEnabled: true,
 		ProxyURL:     "http://user:pass@proxy.internal:9000",
+		HealthStatus: model.ProviderHealthStatusHealthy,
+		BalanceUpdated: time.Now().Unix(),
 		Status:       1,
 	}
 	if err := provider.Insert(); err != nil {
@@ -123,6 +126,8 @@ func TestExportProvidersIncludesRawProxyURLForReImport(t *testing.T) {
 		AccessToken:  "secret-token",
 		ProxyEnabled: true,
 		ProxyURL:     "http://user:pass@proxy.internal:9000",
+		HealthStatus: model.ProviderHealthStatusHealthy,
+		BalanceUpdated: time.Now().Unix(),
 		Status:       1,
 	}
 	if err := provider.Insert(); err != nil {

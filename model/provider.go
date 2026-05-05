@@ -39,6 +39,8 @@ type Provider struct {
 	CreatedAt                int64  `json:"created_at"`
 	HealthBlocked            bool   `json:"health_blocked" gorm:"-"`
 	BalanceFreshness         string `json:"balance_freshness" gorm:"-"`
+	RouteEligible            bool   `json:"route_eligible" gorm:"-"`
+	RouteBlockReasons        []string `json:"route_block_reasons" gorm:"-"`
 	ProxyURLRedacted         string `json:"proxy_url_redacted" gorm:"-"`
 	LastCheckinStatus        string `json:"last_checkin_status" gorm:"-"`
 	LastCheckinMessage       string `json:"last_checkin_message" gorm:"-"`
@@ -87,7 +89,7 @@ func GetAllProviders(startIdx int, num int) ([]*Provider, error) {
 	return providers, err
 }
 
-func QueryProviders(keyword string, startIdx int, num int) ([]*Provider, int64, error) {
+func QueryProviders(keyword string, routeFilter string, startIdx int, num int) ([]*Provider, int64, error) {
 	if startIdx < 0 {
 		startIdx = 0
 	}
@@ -116,14 +118,26 @@ func QueryProviders(keyword string, startIdx int, num int) ([]*Provider, int64, 
 			)
 		}
 	}
+	filteredBase := applyProviderRouteFilterQuery(base, routeFilter, time.Now())
 	var total int64
-	if err := base.Count(&total).Error; err != nil {
+	if err := filteredBase.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	var providers []*Provider
-	err := applyProviderReadProjection(base).Order("id desc").Limit(num).Offset(startIdx).Find(&providers).Error
-	return providers, total, err
+	if err := applyProviderReadProjection(filteredBase).Order("id desc").Limit(num).Offset(startIdx).Find(&providers).Error; err != nil {
+		return nil, 0, err
+	}
+
+	for _, provider := range providers {
+		if provider != nil {
+			provider.applyRuntimeStateAt(time.Now())
+		}
+	}
+	if startIdx >= int(total) {
+		return []*Provider{}, total, nil
+	}
+	return providers, total, nil
 }
 
 func GetProviderById(id int) (*Provider, error) {
@@ -261,8 +275,7 @@ func (p *Provider) CleanForResponse() {
 	p.ProxyURLRedacted = RedactProxyURL(p.ProxyURL)
 	p.ProxyURL = ""
 	p.HealthStatus = normalizeProviderHealthStatus(p.HealthStatus)
-	p.HealthBlocked = p.IsHealthBlockedAt(now)
-	p.BalanceFreshness = p.BalanceFreshnessAt(now)
+	p.applyRuntimeStateAt(now)
 }
 
 // FindProviderByBaseURLAndUserID finds a provider by base_url + user_id combination.

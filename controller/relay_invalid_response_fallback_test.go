@@ -97,11 +97,11 @@ func TestRelayFallbackOnInvalid2xxResponse(t *testing.T) {
 	}))
 	defer validServer.Close()
 
-	providerInvalid := &model.Provider{Name: "invalid-provider", BaseURL: invalidServer.URL, Status: common.UserStatusEnabled}
+	providerInvalid := &model.Provider{Name: "invalid-provider", BaseURL: invalidServer.URL, Status: common.UserStatusEnabled, HealthStatus: model.ProviderHealthStatusHealthy, BalanceUpdated: time.Now().Unix()}
 	if err := providerInvalid.Insert(); err != nil {
 		t.Fatalf("insert invalid provider failed: %v", err)
 	}
-	providerValid := &model.Provider{Name: "valid-provider", BaseURL: validServer.URL, Status: common.UserStatusEnabled}
+	providerValid := &model.Provider{Name: "valid-provider", BaseURL: validServer.URL, Status: common.UserStatusEnabled, HealthStatus: model.ProviderHealthStatusHealthy, BalanceUpdated: time.Now().Unix()}
 	if err := providerValid.Insert(); err != nil {
 		t.Fatalf("insert valid provider failed: %v", err)
 	}
@@ -171,11 +171,11 @@ func TestRelayFallbackOnSSEWithoutMeaningfulDelta(t *testing.T) {
 	}))
 	defer validServer.Close()
 
-	providerInvalid := &model.Provider{Name: "invalid-stream-provider", BaseURL: invalidStreamServer.URL, Status: common.UserStatusEnabled}
+	providerInvalid := &model.Provider{Name: "invalid-stream-provider", BaseURL: invalidStreamServer.URL, Status: common.UserStatusEnabled, HealthStatus: model.ProviderHealthStatusHealthy, BalanceUpdated: time.Now().Unix()}
 	if err := providerInvalid.Insert(); err != nil {
 		t.Fatalf("insert invalid stream provider failed: %v", err)
 	}
-	providerValid := &model.Provider{Name: "valid-provider", BaseURL: validServer.URL, Status: common.UserStatusEnabled}
+	providerValid := &model.Provider{Name: "valid-provider", BaseURL: validServer.URL, Status: common.UserStatusEnabled, HealthStatus: model.ProviderHealthStatusHealthy, BalanceUpdated: time.Now().Unix()}
 	if err := providerValid.Insert(); err != nil {
 		t.Fatalf("insert valid provider failed: %v", err)
 	}

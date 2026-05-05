@@ -36,6 +36,8 @@ func seedControllerModelCatalogData(t *testing.T, providerStatus int, tokenStatu
 		BaseURL:           "https://catalog.example.com",
 		AccessToken:       "catalog-token",
 		Status:            providerStatus,
+		HealthStatus:      model.ProviderHealthStatusHealthy,
+		BalanceUpdated:    time.Now().Unix(),
 		ModelAliasMapping: `{"aaa":"bbbxxxcccddd"}`,
 	}
 	if err := provider.Insert(); err != nil {
